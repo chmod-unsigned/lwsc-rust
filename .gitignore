@@ -1,0 +1,6 @@
+/target/
+**/*.rs.bk
+Cargo.lock
+last_screenshot.png
+.idea/
+.vscode/

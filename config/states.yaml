@@ -1,0 +1,324 @@
+shortcuts:
+  toggle_pause: ctrl+p
+  open_config: ctrl+o
+  force_detect: ctrl+s
+  show_help: ctrl+h
+
+states:
+- state: BASE
+  display_name: Base (Headquarter)
+  type: root
+  templates:
+  - roi/BASE/expected.png
+  parent: null
+  roi:
+    xmin: 0.88
+    xmax: 1.00
+    ymin: 0.86
+    ymax: 1.00
+  min_confidence: 0.9
+  description: Inner city base view with world map button visible in bottom right.
+
+- state: AREA
+  display_name: Area (Wilderness Map)
+  type: root
+  templates:
+  - roi/AREA/expected.png
+  parent: null
+  roi:
+    xmin: 0.88
+    xmax: 1.00
+    ymin: 0.86
+    ymax: 1.00
+  min_confidence: 0.9
+  description: Area map view around player base with base/headquarter button visible in bottom right.
+
+- state: WORLD_MAP
+  display_name: World Map
+  type: root
+  templates:
+  - roi/WORLD_MAP/expected.png
+  parent: null
+  roi:
+    xmin: 0.88
+    xmax: 1.00
+    ymin: 0.86
+    ymax: 1.00
+  min_confidence: 0.9
+  description: World map view with base/headquarter button visible in bottom right.
+
+- state: MAIN_SHOP
+  display_name: Main Shop
+  type: modal
+  templates: []
+  parent:
+  - BASE
+  - AREA
+  roi:
+    xmin: 0.87
+    xmax: 1.00
+    ymin: 0.00
+    ymax: 0.09
+  min_confidence: 0.85
+  description: Main Shop container screen.
+
+- state: MAIN_SHOP_HOT_DEALS
+  display_name: Main Shop (Hot Deals)
+  type: modal
+  templates:
+  - roi/MAIN_SHOP_HOT_DEALS/expected.png
+  parent:
+  - MAIN_SHOP
+  roi:
+    xmin: 0.32
+    xmax: 0.47
+    ymin: 0.00
+    ymax: 0.09
+  min_confidence: 0.85
+  description: Main Shop with Hot Deals tab active.
+
+- state: MAIN_SHOP_MALL
+  display_name: Main Shop (Mall)
+  type: modal
+  templates:
+  - roi/MAIN_SHOP_MALL/expected.png
+  parent:
+  - MAIN_SHOP
+  roi:
+    xmin: 0.46
+    xmax: 0.60
+    ymin: 0.00
+    ymax: 0.09
+  min_confidence: 0.85
+  description: Main Shop with Mall tab active.
+
+- state: SEARCH
+  display_name: Search Panel
+  type: modal
+  templates:
+  - roi/SEARCH/expected.png
+  parent:
+  - AREA
+  roi:
+    xmin: 0.05
+    xmax: 0.95
+    ymin: 0.2
+    ymax: 0.9
+  min_confidence: 0.9
+  description: Search panel for locating zombies, doom elites, or resource nodes on world map.
+
+- state: SEARCH_SPECIAL
+  display_name: Search Special Tab
+  type: sub_modal
+  templates:
+  - roi/SEARCH_SPECIAL/expected.png
+  parent:
+  - SEARCH
+  roi:
+    xmin: 0.05
+    xmax: 0.95
+    ymin: 0.2
+    ymax: 0.9
+  min_confidence: 0.9
+  description: Special target search tab within search panel.
+
+- state: RADAR_TASKS
+  display_name: Radar Tasks
+  type: modal
+  templates:
+  - roi/RADAR_TASKS/expected/
+  parent:
+  - RADAR_TASKS_BUTTON
+  roi:
+    xmin: 0.28
+    xmax: 0.54
+    ymin: 0.00
+    ymax: 0.09
+  min_confidence: 0.85
+  description: Radar mission list and rewards view opened via the radar tasks button.
+
+- state: MAIL
+  display_name: Mail
+  type: modal
+  templates: []
+  parent:
+  - BASE
+  - AREA
+  roi:
+    xmin: 0.89
+    xmax: 1.00
+    ymin: 0.71
+    ymax: 0.84
+  min_confidence: 0.75
+  description: In-game mailbox and battle reports window.
+
+- state: ALLIANCE
+  display_name: Alliance
+  type: modal
+  templates: []
+  parent:
+  - BASE
+  - AREA
+  roi:
+    xmin: 0.90
+    xmax: 1.00
+    ymin: 0.63
+    ymax: 0.78
+  min_confidence: 0.8
+  description: Alliance menu container.
+
+- state: ALLIANCE_GIFTS_REGULAR
+  display_name: Alliance Regular Gifts
+  type: sub_modal
+  templates:
+  - roi/ALLIANCE_GIFTS_REGULAR/expected/
+  parent:
+  - ALLIANCE_GIFTS_BUTTON
+  roi:
+    xmin: 0.28
+    xmax: 0.50
+    ymin: 0.00
+    ymax: 0.33
+  min_confidence: 0.85
+  description: Alliance regular gifts claim view opened via the gifts button.
+
+- state: ALLIANCE_GIFTS_PREMIUM
+  display_name: Alliance Premium Gifts
+  type: sub_modal
+  templates:
+  - roi/ALLIANCE_GIFTS_PREMIUM/expected/
+  parent:
+  - ALLIANCE_GIFTS_PREMIUM_BUTTON
+  roi:
+    xmin: 0.28
+    xmax: 0.67
+    ymin: 0.00
+    ymax: 0.33
+  min_confidence: 0.85
+  description: Alliance premium/rare gifts claim view.
+
+buttons:
+- id: MAIN_SHOP
+  display_name: Main Shop Button
+  parent_states:
+  - BASE
+  - AREA
+  target_state: MAIN_SHOP
+  template: roi/MAIN_SHOP/expected.png
+  roi:
+    xmin: 0.87
+    xmax: 1.0
+    ymin: 0.0
+    ymax: 0.09
+  min_confidence: 0.85
+  description: Main Shop entrance button on Base and Area screens.
+
+- id: ALLIANCE
+  display_name: Alliance Button
+  parent_states:
+  - BASE
+  - AREA
+  target_state: ALLIANCE
+  template: roi/ALLIANCE/expected.png
+  roi:
+    xmin: 0.9
+    xmax: 1.0
+    ymin: 0.63
+    ymax: 0.78
+  min_confidence: 0.8
+  description: Alliance menu button on Base and Area screens.
+
+- id: MAIL
+  display_name: Mail Button
+  parent_states:
+  - BASE
+  - AREA
+  target_state: MAIL
+  template: roi/MAIL/expected.png
+  roi:
+    xmin: 0.89
+    xmax: 1.0
+    ymin: 0.71
+    ymax: 0.84
+  min_confidence: 0.75
+  description: Mailbox entrance button on Base and Area screens.
+
+- id: ALLIANCE_GIFTS_BUTTON
+  display_name: Alliance Gifts Button
+  parent_states:
+  - ALLIANCE
+  target_state: ALLIANCE_GIFTS_REGULAR
+  template: roi/ALLIANCE_GIFTS_BUTTON/expected.png
+  roi:
+    xmin: 0.32
+    xmax: 0.54
+    ymin: 0.50
+    ymax: 0.66
+  min_confidence: 0.85
+  description: Alliance gifts claim button inside Alliance menu leading to regular gifts.
+
+- id: ALLIANCE_GIFTS_PREMIUM_BUTTON
+  display_name: Alliance Premium Gifts Button
+  parent_states:
+  - ALLIANCE
+  - ALLIANCE_GIFTS_REGULAR
+  target_state: ALLIANCE_GIFTS_PREMIUM
+  template: roi/ALLIANCE_GIFTS_PREMIUM_BUTTON/expected.png
+  roi: null
+  min_confidence: 0.85
+  description: Alliance premium gifts tab button leading to premium gifts.
+
+- id: HELP
+  display_name: Alliance Help Button
+  parent_states:
+  - BASE
+  - AREA
+  target_state: null
+  template: roi/HELP/expected.png
+  roi:
+    xmin: 0.86
+    xmax: 0.98
+    ymin: 0.64
+    ymax: 0.77
+  min_confidence: 0.85
+  save_cursor: true
+  description: Alliance help prompt button appearing on Base and Area screens.
+
+- id: RADAR_TASKS_BUTTON
+  display_name: Radar Tasks Button
+  parent_states:
+  - BASE
+  - AREA
+  target_state: RADAR_TASKS
+  template: roi/RADAR_TASKS_BUTTON/expected.png
+  roi:
+    xmin: 0.43
+    xmax: 0.56
+    ymin: 0.00
+    ymax: 0.11
+  min_confidence: 0.75
+  save_cursor: false
+  description: Radar tasks prompt button appearing on Base and Area screens.
+
+actions:
+- name: alliance_help
+  description: Auto-click Alliance Help button when visible in bottom-right area
+  button: HELP
+  enabled: true
+  cooldown_s: 2.0
+  priority: 1
+
+- name: alliance_gift_claim
+  description: Auto-claim all available regular alliance gifts
+  button: ALLIANCE_GIFTS_BUTTON
+  enabled: true
+  state: ALLIANCE_GIFTS_REGULAR
+  cooldown_s: 5.0
+  priority: 2
+
+- name: radar_task_claim
+  description: Auto-claim radar mission rewards when prompt appears
+  button: RADAR_TASKS_BUTTON
+  enabled: false
+  cooldown_s: 3.0
+  priority: 3

@@ -1,0 +1,112 @@
+//! Button definitions and detection for UI elements attached to GameStates.
+
+use serde::{Deserialize, Serialize};
+
+use crate::core::state::{GameState, NormalizedROI};
+
+fn default_min_confidence() -> f32 {
+    0.85
+}
+
+/// A button or interactive UI element that can appear on one or more GameStates.
+/// Clicks on this button can either transition to a `target_state` or execute a standalone action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ButtonDefinition {
+    /// Unique identifier for this button (e.g. "HELP", "ALLIANCE_GIFTS_BUTTON", "MAIN_SHOP")
+    pub id: String,
+
+    /// Human readable name
+    pub display_name: String,
+
+    /// The game states on which this button can appear
+    #[serde(default)]
+    pub parent_states: Vec<GameState>,
+
+    /// The destination game state if clicking this button opens another screen/menu
+    #[serde(default)]
+    pub target_state: Option<GameState>,
+
+    /// Path to template image under roi/
+    pub template: String,
+
+    /// Normalized Region Of Interest (0.0 .. 1.0)
+    pub roi: Option<NormalizedROI>,
+
+    /// Minimum matching confidence (0.0 .. 1.0)
+    #[serde(default = "default_min_confidence")]
+    pub min_confidence: f32,
+
+    /// Whether to restore previous cursor position after clicking this button (default: false)
+    #[serde(default)]
+    pub save_cursor: bool,
+
+    /// Optional description
+    pub description: Option<String>,
+}
+
+impl ButtonDefinition {
+    /// Resolves template file paths, expanding any directory paths into image files.
+    pub fn resolved_templates(&self) -> Vec<String> {
+        let p = std::path::Path::new(&self.template);
+        if p.is_dir() {
+            let mut results = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(p) {
+                for entry in entries.flatten() {
+                    let ep = entry.path();
+                    if let Some(ext) = ep.extension().and_then(|e| e.to_str()) {
+                        let lower = ext.to_lowercase();
+                        if lower == "png" || lower == "jpg" || lower == "jpeg" {
+                            results.push(ep.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+            results.sort();
+            results
+        } else {
+            vec![self.template.clone()]
+        }
+    }
+}
+
+/// Result of a button detected on the current screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ButtonDetection {
+    /// Button identifier
+    pub id: String,
+
+    /// Display name
+    pub display_name: String,
+
+    /// Destination game state if clicking this button transitions to another state
+    pub target_state: Option<GameState>,
+
+    /// Matching confidence score
+    pub confidence: f32,
+
+    /// Template matched
+    pub matched_template: String,
+
+    /// Pixel bounding box of the match within the screen (x, y, width, height)
+    pub match_box: (u32, u32, u32, u32),
+
+    /// Screen-relative center coordinates (x, y) for clicking
+    pub match_center: (i32, i32),
+
+    /// Whether to restore previous cursor position after clicking this button
+    #[serde(default)]
+    pub save_cursor: bool,
+}
+
+/// Loads all button definitions from YAML configuration.
+pub fn load_buttons_from_config(path: &str) -> Result<Vec<ButtonDefinition>, Box<dyn std::error::Error>> {
+    #[derive(Deserialize)]
+    struct ConfigWrapper {
+        #[serde(default)]
+        buttons: Vec<ButtonDefinition>,
+    }
+
+    let file = std::fs::File::open(path)?;
+    let wrapper: ConfigWrapper = serde_yaml::from_reader(file)?;
+    Ok(wrapper.buttons)
+}
