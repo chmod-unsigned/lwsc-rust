@@ -102,6 +102,10 @@ pub struct ActionDefinition {
     #[serde(default)]
     pub template: Option<String>,
 
+    /// Optional specific template name/path to click when multiple templates exist in expected/
+    #[serde(default)]
+    pub click_template: Option<String>,
+
     /// Region of Interest (ROI) that gates this action
     #[serde(default)]
     pub roi: Option<NormalizedROI>,
@@ -130,6 +134,10 @@ pub struct ActionDefinition {
     #[serde(default)]
     pub save_cursor: bool,
 
+    /// Optional shortcut key trigger (e.g. "ctrl+1", "f1", "alt+h")
+    #[serde(default)]
+    pub shortcut: Option<String>,
+
     /// Internal runtime timestamp for cooldown enforcement
     #[serde(skip)]
     pub last_executed: Option<Instant>,
@@ -152,13 +160,43 @@ impl ActionDefinition {
         self.last_executed = Some(Instant::now());
     }
 
-    /// Resolves properties (template, roi, min_confidence, save_cursor, parent_states)
+    /// Resolves template file paths, expanding any directory paths into image files.
+    pub fn resolved_templates(&self) -> Vec<String> {
+        if let Some(ref t) = self.template {
+            let p = std::path::Path::new(t);
+            if p.is_dir() {
+                let mut results = Vec::new();
+                if let Ok(entries) = std::fs::read_dir(p) {
+                    for entry in entries.flatten() {
+                        let ep = entry.path();
+                        if let Some(ext) = ep.extension().and_then(|e| e.to_str()) {
+                            let lower = ext.to_lowercase();
+                            if lower == "png" || lower == "jpg" || lower == "jpeg" {
+                                results.push(ep.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+                results.sort();
+                results
+            } else {
+                vec![t.clone()]
+            }
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Resolves properties (template, click_template, roi, min_confidence, save_cursor, parent_states, shortcut)
     /// from a corresponding ButtonDefinition if `button` is specified.
     pub fn resolve_button(&mut self, buttons: &[crate::core::button::ButtonDefinition]) {
         if let Some(ref btn_id) = self.button {
             if let Some(btn) = buttons.iter().find(|b| b.id.eq_ignore_ascii_case(btn_id)) {
                 if self.template.is_none() {
                     self.template = Some(btn.template.clone());
+                }
+                if self.click_template.is_none() {
+                    self.click_template = btn.click_template.clone();
                 }
                 if self.roi.is_none() {
                     self.roi = btn.roi;
@@ -171,6 +209,9 @@ impl ActionDefinition {
                 }
                 if self.parent_states.is_empty() {
                     self.parent_states = btn.parent_states.clone();
+                }
+                if self.shortcut.is_none() {
+                    self.shortcut = btn.shortcut.clone();
                 }
             }
         }
@@ -222,6 +263,32 @@ impl ActionManager {
         Ok(Self::new(actions))
     }
 
+    /// Reloads all actions and button references from YAML configuration file,
+    /// updating cooldowns, priorities, templates, shortcuts, enabled states, etc.,
+    /// while preserving runtime cooldown execution timestamps (`last_executed`).
+    pub fn reload_from_yaml<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let loaded = crate::core::state::load_actions_from_config(path)?;
+        let mut list = self.actions.write().unwrap();
+
+        // Build map of existing last_executed timestamps
+        let mut last_exec_map = std::collections::HashMap::new();
+        for a in list.iter() {
+            if let Some(ts) = a.last_executed {
+                last_exec_map.insert(a.name.to_lowercase(), ts);
+            }
+        }
+
+        let mut new_list = loaded;
+        for action in new_list.iter_mut() {
+            if let Some(ts) = last_exec_map.get(&action.name.to_lowercase()) {
+                action.last_executed = Some(*ts);
+            }
+        }
+
+        *list = new_list;
+        Ok(())
+    }
+
     pub fn list_actions(&self) -> Vec<ActionDefinition> {
         self.actions.read().unwrap().clone()
     }
@@ -244,6 +311,185 @@ impl ActionManager {
             .unwrap_or(false)
     }
 
+    /// Returns list of all defined action shortcuts as `(action_name, shortcut_spec)`
+    pub fn get_shortcuts(&self) -> Vec<(String, String)> {
+        let list = self.actions.read().unwrap();
+        list.iter()
+            .filter_map(|a| a.shortcut.as_ref().map(|s| (a.name.clone(), s.clone())))
+            .collect()
+    }
+
+    /// Directly evaluates and executes a single action by name (e.g. triggered via manual keyboard shortcut).
+    pub fn execute_single_action(
+        &self,
+        name: &str,
+        current_state: GameState,
+        screen: &RgbaImage,
+        matcher: &mut TemplateMatcher,
+        bypass_cooldown: bool,
+    ) -> Option<ActionExecutionResult> {
+        let (img_w, img_h) = screen.dimensions();
+        let mut list = self.actions.write().unwrap();
+        let action = list.iter_mut().find(|a| a.name.eq_ignore_ascii_case(name))?;
+
+        // 1. Check state condition if specified, and parent states
+        if let Some(req_state) = action.state {
+            if req_state != current_state {
+                return Some(ActionExecutionResult {
+                    action_name: action.name.clone(),
+                    executed: false,
+                    reason: format!("Current state {:?} does not match required state {:?}", current_state, req_state),
+                    click_coords: None,
+                    save_cursor: action.save_cursor,
+                });
+            }
+        }
+        if !action.parent_states.is_empty() && !action.parent_states.contains(&current_state) {
+            return Some(ActionExecutionResult {
+                action_name: action.name.clone(),
+                executed: false,
+                reason: format!("Current state {:?} is not in parent_states {:?}", current_state, action.parent_states),
+                click_coords: None,
+                save_cursor: action.save_cursor,
+            });
+        }
+
+        // 2. Check cooldown if not bypassed
+        if !bypass_cooldown && action.is_on_cooldown() {
+            return Some(ActionExecutionResult {
+                action_name: action.name.clone(),
+                executed: false,
+                reason: format!("Action is on cooldown ({:.1}s)", action.cooldown_s),
+                click_coords: None,
+                save_cursor: action.save_cursor,
+            });
+        }
+
+        let roi_px = action.roi.map(|r| r.to_pixel_box(img_w, img_h));
+
+        match action.action_type {
+            ActionType::ClickTemplate => {
+                let templates = action.resolved_templates();
+                if templates.is_empty() {
+                    return Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: false,
+                        reason: "Missing template path for ClickTemplate action".to_string(),
+                        click_coords: None,
+                        save_cursor: action.save_cursor,
+                    });
+                }
+
+                let mut all_matched = true;
+                let mut min_confidence = 1.0f32;
+                let mut matches = Vec::new();
+
+                for tmpl_path in &templates {
+                    let match_res = matcher.find_match(
+                        screen,
+                        tmpl_path,
+                        action.min_confidence,
+                        roi_px,
+                    );
+
+                    if !match_res.matched {
+                        all_matched = false;
+                        break;
+                    }
+
+                    if match_res.confidence < min_confidence {
+                        min_confidence = match_res.confidence;
+                    }
+                    matches.push((tmpl_path.clone(), match_res));
+                }
+
+                if all_matched && !matches.is_empty() {
+                    let click_match = crate::core::button::select_click_match(&matches, action.click_template.as_deref())
+                        .unwrap_or(&matches[0].1);
+                    action.mark_executed();
+                    let jx = random_jitter(click_match.width as f32 * 0.18);
+                    let jy = random_jitter(click_match.height as f32 * 0.18);
+                    let click_x = (click_match.center_x as f32 + jx).round() as i32;
+                    let click_y = (click_match.center_y as f32 + jy).round() as i32;
+
+                    Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: true,
+                        reason: format!(
+                            "Template matched with {:.2}% confidence in ROI (manual shortcut)",
+                            min_confidence * 100.0
+                        ),
+                        click_coords: Some((click_x, click_y)),
+                        save_cursor: action.save_cursor,
+                    })
+                } else {
+                    let failed_conf = matches.iter().map(|(_, m)| m.confidence).fold(0.0f32, f32::max);
+                    Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: false,
+                        reason: format!("Template match failed (confidence: {:.2}%)", failed_conf * 100.0),
+                        click_coords: None,
+                        save_cursor: action.save_cursor,
+                    })
+                }
+            }
+            ActionType::ClickRoi => {
+                if let Some(roi) = action.roi {
+                    let w = (roi.xmax - roi.xmin) * img_w as f32;
+                    let h = (roi.ymax - roi.ymin) * img_h as f32;
+                    let center_x = (roi.xmin + roi.xmax) * 0.5 * img_w as f32 + random_jitter(w * 0.15);
+                    let center_y = (roi.ymin + roi.ymax) * 0.5 * img_h as f32 + random_jitter(h * 0.15);
+                    action.mark_executed();
+                    Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: true,
+                        reason: "Clicked center of designated ROI (manual shortcut)".to_string(),
+                        click_coords: Some((center_x.round() as i32, center_y.round() as i32)),
+                        save_cursor: action.save_cursor,
+                    })
+                } else {
+                    None
+                }
+            }
+            ActionType::ClickCoords => {
+                if let Some((nx, ny)) = action.coords {
+                    let cx = (nx * img_w as f32) + random_jitter(4.0);
+                    let cy = (ny * img_h as f32) + random_jitter(4.0);
+                    action.mark_executed();
+                    Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: true,
+                        reason: "Clicked designated normalized coordinates (manual shortcut)".to_string(),
+                        click_coords: Some((cx.round() as i32, cy.round() as i32)),
+                        save_cursor: action.save_cursor,
+                    })
+                } else {
+                    None
+                }
+            }
+            ActionType::KeyPress => {
+                action.mark_executed();
+                Some(ActionExecutionResult {
+                    action_name: action.name.clone(),
+                    executed: true,
+                    reason: format!("Key press action: {:?}", action.key_name),
+                    click_coords: None,
+                    save_cursor: action.save_cursor,
+                })
+            }
+            ActionType::Custom => {
+                action.mark_executed();
+                Some(ActionExecutionResult {
+                    action_name: action.name.clone(),
+                    executed: true,
+                    reason: "Custom action triggered (manual shortcut)".to_string(),
+                    click_coords: None,
+                    save_cursor: action.save_cursor,
+                })
+            }
+        }
+    }
+
     /// Evaluates all active actions against the current screen and state.
     /// Checks ROI bounds, template matching within ROI, and cooldowns.
     pub fn evaluate(
@@ -264,12 +510,13 @@ impl ActionManager {
                 continue;
             }
 
-            // 1. Check state condition if specified, or parent states from linked button
+            // 1. Check state condition if specified, and parent states from linked button
             if let Some(req_state) = action.state {
                 if req_state != current_state {
                     continue;
                 }
-            } else if !action.parent_states.is_empty() {
+            }
+            if !action.parent_states.is_empty() {
                 if !action.parent_states.contains(&current_state) {
                     continue;
                 }
@@ -291,65 +538,88 @@ impl ActionManager {
 
             match action.action_type {
                 ActionType::ClickTemplate => {
-                    let tmpl_path = match action.template.as_deref() {
-                        Some(p) => p,
-                        None => {
-                            results.push(ActionExecutionResult {
-                                action_name: action.name.clone(),
-                                executed: false,
-                                reason: "Missing template path for ClickTemplate action".to_string(),
-                                click_coords: None,
-                                save_cursor: action.save_cursor,
-                            });
-                            continue;
+                    let templates = action.resolved_templates();
+                    if templates.is_empty() {
+                        results.push(ActionExecutionResult {
+                            action_name: action.name.clone(),
+                            executed: false,
+                            reason: "Missing template path for ClickTemplate action".to_string(),
+                            click_coords: None,
+                            save_cursor: action.save_cursor,
+                        });
+                        continue;
+                    }
+
+                    let mut all_matched = true;
+                    let mut min_confidence = 1.0f32;
+                    let mut matches = Vec::new();
+
+                    for tmpl_path in &templates {
+                        let match_res = matcher.find_match(
+                            screen,
+                            tmpl_path,
+                            action.min_confidence,
+                            roi_px,
+                        );
+
+                        if !match_res.matched {
+                            all_matched = false;
+                            break;
                         }
-                    };
 
-                    let match_res = matcher.find_match(
-                        screen,
-                        tmpl_path,
-                        action.min_confidence,
-                        roi_px,
-                    );
+                        if match_res.confidence < min_confidence {
+                            min_confidence = match_res.confidence;
+                        }
+                        matches.push((tmpl_path.clone(), match_res));
+                    }
 
-                    if match_res.matched {
+                    if all_matched && !matches.is_empty() {
+                        let click_match = crate::core::button::select_click_match(&matches, action.click_template.as_deref())
+                            .unwrap_or(&matches[0].1);
                         action.mark_executed();
+                        let jx = random_jitter(click_match.width as f32 * 0.18);
+                        let jy = random_jitter(click_match.height as f32 * 0.18);
+                        let click_x = (click_match.center_x as f32 + jx).round() as i32;
+                        let click_y = (click_match.center_y as f32 + jy).round() as i32;
+
                         results.push(ActionExecutionResult {
                             action_name: action.name.clone(),
                             executed: true,
                             reason: format!(
                                 "Template matched with {:.2}% confidence in ROI",
-                                match_res.confidence * 100.0
+                                min_confidence * 100.0
                             ),
-                            click_coords: Some((match_res.center_x as i32, match_res.center_y as i32)),
+                            click_coords: Some((click_x, click_y)),
                             save_cursor: action.save_cursor,
                         });
                     }
                 }
                 ActionType::ClickRoi => {
                     if let Some(roi) = action.roi {
-                        let center_x = ((roi.xmin + roi.xmax) * 0.5 * img_w as f32) as i32;
-                        let center_y = ((roi.ymin + roi.ymax) * 0.5 * img_h as f32) as i32;
+                        let w = (roi.xmax - roi.xmin) * img_w as f32;
+                        let h = (roi.ymax - roi.ymin) * img_h as f32;
+                        let center_x = (roi.xmin + roi.xmax) * 0.5 * img_w as f32 + random_jitter(w * 0.15);
+                        let center_y = (roi.ymin + roi.ymax) * 0.5 * img_h as f32 + random_jitter(h * 0.15);
                         action.mark_executed();
                         results.push(ActionExecutionResult {
                             action_name: action.name.clone(),
                             executed: true,
                             reason: "Clicked center of designated ROI".to_string(),
-                            click_coords: Some((center_x, center_y)),
+                            click_coords: Some((center_x.round() as i32, center_y.round() as i32)),
                             save_cursor: action.save_cursor,
                         });
                     }
                 }
                 ActionType::ClickCoords => {
                     if let Some((nx, ny)) = action.coords {
-                        let cx = (nx * img_w as f32) as i32;
-                        let cy = (ny * img_h as f32) as i32;
+                        let cx = (nx * img_w as f32) + random_jitter(4.0);
+                        let cy = (ny * img_h as f32) + random_jitter(4.0);
                         action.mark_executed();
                         results.push(ActionExecutionResult {
                             action_name: action.name.clone(),
                             executed: true,
                             reason: "Clicked designated normalized coordinates".to_string(),
-                            click_coords: Some((cx, cy)),
+                            click_coords: Some((cx.round() as i32, cy.round() as i32)),
                             save_cursor: action.save_cursor,
                         });
                     }
@@ -379,4 +649,16 @@ impl ActionManager {
 
         results
     }
+}
+
+fn random_jitter(range: f32) -> f32 {
+    use std::time::SystemTime;
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x12345678);
+    let mut state = nanos.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let norm = (state >> 40) as f32 / 16777216.0;
+    (norm * 2.0 - 1.0) * range
 }

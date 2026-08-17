@@ -10,7 +10,7 @@ pub use state::{
     SHORTCUTS_CONFIG, ShortcutsConfig, load_shortcuts_from_config,
     get_state_definition, load_state_definitions, load_actions_from_config, load_state_definitions_or_default,
 };
-pub use button::{ButtonDefinition, ButtonDetection, load_buttons_from_config};
+pub use button::{ButtonDefinition, ButtonDetection, load_buttons_from_config, select_click_match};
 pub use state_graph::{StateGraph, TransitionEdge};
 pub use action::{ActionDefinition, ActionManager, ActionType, ActionExecutionResult, ActionsConfigFile};
 pub use detector::{StateDetector, DetectionResult};

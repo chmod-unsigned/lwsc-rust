@@ -72,6 +72,19 @@ impl InputManager {
                         triggers.push(trig);
                     }
 
+                    // Dynamically register action shortcuts from config/states.yaml
+                    if let Ok(actions) = crate::core::load_actions_from_config("config/states.yaml") {
+                        for action in actions {
+                            if let Some(ref spec) = action.shortcut {
+                                let trigger_id = format!("action:{}", action.name);
+                                if let Some(trig) = parse_shortcut_trigger(&conn, &trigger_id, spec) {
+                                    println!("[InputManager] Registered action shortcut: {} ➔ {}", spec, action.name);
+                                    triggers.push(trig);
+                                }
+                            }
+                        }
+                    }
+
                     // Initial keymap state
                     if let Ok(cookie) = conn.query_keymap() {
                         if let Ok(reply) = cookie.reply() {
@@ -139,9 +152,9 @@ impl InputManager {
 
                                     let fully_pressed = key_pressed && ctrl_matches && alt_matches && shift_matches;
 
-                                    if fully_pressed && !trigger.prev_pressed && is_focused {
+                                    if fully_pressed && !trigger.prev_pressed {
                                         if let Some(ref cb) = on_hotkey {
-                                            cb(trigger.id);
+                                            cb(&trigger.id);
                                         }
                                     }
                                     trigger.prev_pressed = fully_pressed;
@@ -259,9 +272,19 @@ impl SimpleRng {
     fn gen_range_f32(&mut self, min: f32, max: f32) -> f32 {
         min + (max - min) * self.next_f32()
     }
+
+    /// Returns u64 in [min, max]
+    fn gen_range_u64(&mut self, min: u64, max: u64) -> u64 {
+        if min >= max {
+            return min;
+        }
+        min + (self.next_u64() % (max - min + 1))
+    }
 }
 
 /// Generates human-like trajectory points between start and target coords in strictly less than 300ms.
+/// Uses dynamic asymmetric Bézier curves, Fitts's Law acceleration/deceleration, physiological muscle tremors,
+/// subtle overshoot corrections, and variable inter-step timing.
 pub fn generate_human_path(
     start_x: i16,
     start_y: i16,
@@ -279,38 +302,73 @@ pub fn generate_human_path(
 
     let mut rng = SimpleRng::new();
 
-    // Bound total duration (e.g. 70ms to max_duration_ms, strictly <= 280ms)
-    let max_dur = (max_duration_ms as f32).min(280.0);
-    let total_duration_ms = (75.0 + (dist * 0.20).min(max_dur - 85.0) + rng.gen_range_f32(-10.0, 10.0))
-        .clamp(60.0, max_dur);
+    // 1. Bound total duration dynamically based on distance (strictly <= 275ms)
+    let max_dur = (max_duration_ms as f32).min(275.0);
+    let base_dur = 70.0 + (dist * 0.18).min(max_dur - 85.0);
+    let dur_jitter = rng.gen_range_f32(-15.0, 15.0);
+    let total_duration_ms = (base_dur + dur_jitter).clamp(65.0, max_dur);
 
-    // Number of steps (interval ~6 to 10ms per step)
-    let step_time_ms = rng.gen_range_f32(6.5, 9.5);
-    let num_steps = ((total_duration_ms / step_time_ms).round() as usize).clamp(5, 35);
+    // Number of steps (interval ~5 to 9ms per step)
+    let avg_step_time_ms = rng.gen_range_f32(6.0, 8.5);
+    let num_steps = ((total_duration_ms / avg_step_time_ms).round() as usize).clamp(7, 36);
 
-    // Perpendicular vector for natural curved trajectory
-    let perp_x = -dy / dist;
-    let perp_y = dx / dist;
+    // Unit tangent and perpendicular vectors
+    let dir_x = dx / dist;
+    let dir_y = dy / dist;
+    let perp_x = -dir_y;
+    let perp_y = dir_x;
 
-    // Random curvature deviation
-    let max_dev = (dist * 0.15).min(50.0);
-    let dev1 = rng.gen_range_f32(-max_dev, max_dev);
-    let dev2 = rng.gen_range_f32(-max_dev * 0.6, max_dev * 0.6);
+    // Asymmetric biomechanical arcs (wrist/arm rotation curve)
+    let max_curvature = (dist * 0.22).min(75.0);
+    let arc_sign = if rng.next_f32() > 0.5 { 1.0 } else { -1.0 };
+    let primary_curve = arc_sign * rng.gen_range_f32(max_curvature * 0.35, max_curvature);
+    let secondary_curve = -arc_sign * rng.gen_range_f32(0.0, max_curvature * 0.45);
+
+    // Optional subtle overshoot for longer distances (>80px, 50% probability)
+    let has_overshoot = dist > 80.0 && rng.next_f32() < 0.55;
+    let overshoot_amount = if has_overshoot {
+        rng.gen_range_f32(2.5, (dist * 0.04).min(7.0))
+    } else {
+        0.0
+    };
 
     // Cubic Bézier control points
     let p0 = (start_x as f32, start_y as f32);
-    let p1 = (p0.0 + dx * 0.30 + perp_x * dev1, p0.1 + dy * 0.30 + perp_y * dev1);
-    let p2 = (p0.0 + dx * 0.70 + perp_x * dev2, p0.1 + dy * 0.70 + perp_y * dev2);
+    let cp1_dist = rng.gen_range_f32(0.25, 0.40);
+    let p1 = (
+        p0.0 + dx * cp1_dist + perp_x * primary_curve,
+        p0.1 + dy * cp1_dist + perp_y * primary_curve,
+    );
+    let cp2_dist = rng.gen_range_f32(0.65, 0.85);
+    let p2 = (
+        p0.0 + dx * cp2_dist + dir_x * overshoot_amount + perp_x * secondary_curve,
+        p0.1 + dy * cp2_dist + dir_y * overshoot_amount + perp_y * secondary_curve,
+    );
     let p3 = (target_x as f32, target_y as f32);
 
-    let per_step_duration = Duration::from_millis((total_duration_ms / num_steps as f32).max(4.0) as u64);
+    // Physiological muscle tremor frequencies & random phases
+    let tremor_freq1 = rng.gen_range_f32(8.0, 14.0);
+    let tremor_freq2 = rng.gen_range_f32(18.0, 26.0);
+    let tremor_phase1 = rng.gen_range_f32(0.0, std::f32::consts::PI * 2.0);
+    let tremor_phase2 = rng.gen_range_f32(0.0, std::f32::consts::PI * 2.0);
+    let max_tremor_amp = (dist * 0.015).clamp(0.6, 2.5);
+
     let mut path = Vec::with_capacity(num_steps);
+    let mut remaining_time_ms = total_duration_ms;
 
     for i in 1..=num_steps {
         let u = i as f32 / num_steps as f32;
-        // Smooth quintic easing (slow start, fast mid-motion, gentle deceleration into target)
-        let t = u * u * u * (u * (u * 6.0 - 15.0) + 10.0);
 
+        // Kinematic velocity profile (rapid acceleration and gradual precision landing)
+        let t = if u < 0.85 {
+            let u_norm = u / 0.85;
+            0.85 * (u_norm * u_norm * (3.0 - 2.0 * u_norm))
+        } else {
+            let u_tail = (u - 0.85) / 0.15;
+            0.85 + 0.15 * (1.0 - (-3.0 * u_tail).exp()) / (1.0 - (-3.0f32).exp())
+        };
+
+        // Bézier position
         let one_minus_t = 1.0 - t;
         let omt2 = one_minus_t * one_minus_t;
         let omt3 = omt2 * one_minus_t;
@@ -320,16 +378,27 @@ pub fn generate_human_path(
         let mut bx = omt3 * p0.0 + 3.0 * omt2 * t * p1.0 + 3.0 * one_minus_t * t2 * p2.0 + t3 * p3.0;
         let mut by = omt3 * p0.1 + 3.0 * omt2 * t * p1.1 + 3.0 * one_minus_t * t2 * p2.1 + t3 * p3.1;
 
-        // Subtle micro-tremor (dampens to zero at target)
+        // Physiological multi-frequency tremor (peaks mid-trajectory, dampens to 0 at the end)
         if i < num_steps {
-            let tremor = (1.0 - u) * 1.0;
-            bx += rng.gen_range_f32(-tremor, tremor);
-            by += rng.gen_range_f32(-tremor, tremor);
+            let envelope = (std::f32::consts::PI * u).sin();
+            let wave1 = (u * tremor_freq1 + tremor_phase1).sin();
+            let wave2 = (u * tremor_freq2 + tremor_phase2).sin() * 0.5;
+            let tremor_offset = envelope * max_tremor_amp * (wave1 + wave2);
+            bx += perp_x * tremor_offset;
+            by += perp_y * tremor_offset;
         }
 
-        path.push((bx.round() as i16, by.round() as i16, per_step_duration));
+        // Variable inter-step time jitter (5-9ms)
+        let steps_left = (num_steps - i + 1) as f32;
+        let target_step_ms = (remaining_time_ms / steps_left).clamp(4.0, 11.0);
+        let step_jitter = rng.gen_range_f32(-1.0, 1.0);
+        let step_ms = (target_step_ms + step_jitter).max(3.5);
+        remaining_time_ms = (remaining_time_ms - step_ms).max(0.0);
+
+        path.push((bx.round() as i16, by.round() as i16, Duration::from_millis(step_ms.round() as u64)));
     }
 
+    // Guarantee the very last point is exactly the target
     if let Some(last) = path.last_mut() {
         last.0 = target_x;
         last.1 = target_y;
@@ -340,11 +409,13 @@ pub fn generate_human_path(
 
 /// RAII Guard that temporarily isolates physical mouse pointer input during bot actions
 /// ensuring physical user movements do not perturb the bot's human Bézier trajectory or click.
+#[allow(dead_code)]
 pub struct InputGrabGuard<'a> {
     conn: &'a RustConnection,
     grabbed: bool,
 }
 
+#[allow(dead_code)]
 impl<'a> InputGrabGuard<'a> {
     pub fn grab_pointer(conn: &'a RustConnection, root: u32) -> Self {
         use x11rb::protocol::xproto::{EventMask, GrabMode, GrabStatus, ConnectionExt};
@@ -409,10 +480,7 @@ pub fn send_x11_click_ex(target_x: i16, target_y: i16, save_cursor: bool) -> boo
             println!("[Bot Cursor] Saved OLD mouse position: ({}, {})", start_x, start_y);
         }
 
-        // 2. Isolate physical mouse movements during bot movement & click execution
-        let _grab_guard = InputGrabGuard::grab_pointer(&conn, root);
-
-        // 3. Human-like movement path towards target (in <250ms)
+        // 2. Human-like movement path towards target (in <250ms)
         let forward_path = generate_human_path(start_x, start_y, target_x, target_y, 250);
         let total_forward_ms: u128 = forward_path.iter().map(|(_, _, d)| d.as_millis()).sum();
         println!(
@@ -426,17 +494,26 @@ pub fn send_x11_click_ex(target_x: i16, target_y: i16, save_cursor: bool) -> boo
             thread::sleep(step_delay);
         }
 
-        // Micro-hesitation before click (15-20ms)
-        thread::sleep(Duration::from_millis(15));
+        // Micro-pause before press (20-30ms) to ensure cursor is firmly on target
+        let mut rng = SimpleRng::new();
+        let pre_click_ms = rng.gen_range_u64(20, 35);
+        thread::sleep(Duration::from_millis(pre_click_ms));
 
         // 4. Button 1 press (ButtonPress = 4, detail = 1)
         let _ = conn.xtest_fake_input(4, 1, 0, root, target_x, target_y, 0);
         let _ = conn.flush();
-        thread::sleep(Duration::from_millis(40));
+
+        // Realistic human click hold duration (90-130ms) so the game UI & event loop definitely register the click
+        let click_hold_ms = rng.gen_range_u64(90, 130);
+        thread::sleep(Duration::from_millis(click_hold_ms));
 
         // 5. Button 1 release (ButtonRelease = 5, detail = 1)
         let _ = conn.xtest_fake_input(5, 1, 0, root, target_x, target_y, 0);
         let _ = conn.flush();
+
+        // Post-release dwell delay (35-50ms) to let the game UI acknowledge release before mouse moves away
+        let post_click_ms = rng.gen_range_u64(35, 55);
+        thread::sleep(Duration::from_millis(post_click_ms));
 
         // 6. Restore original cursor position if save_cursor was requested
         if save_cursor {
@@ -480,7 +557,7 @@ pub fn send_x11_key(key_name: &str) -> bool {
                 // KeyPress = 2, KeyRelease = 3
                 let _ = conn.xtest_fake_input(2, keycode, 0, root, 0, 0, 0);
                 let _ = conn.flush();
-                thread::sleep(Duration::from_millis(40));
+                thread::sleep(Duration::from_millis(70));
                 let _ = conn.xtest_fake_input(3, keycode, 0, root, 0, 0, 0);
                 let _ = conn.flush();
                 return true;
@@ -562,7 +639,7 @@ fn is_game_focused(conn: &RustConnection, root: u32, win: &WindowInfo) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct ShortcutTrigger {
-    pub id: &'static str,
+    pub id: String,
     pub keycode: u8,
     pub require_ctrl: bool,
     pub require_alt: bool,
@@ -572,6 +649,16 @@ pub struct ShortcutTrigger {
 
 fn resolve_keysym_from_str(s: &str) -> u32 {
     match s.trim().to_lowercase().as_str() {
+        "0" => 0x0030,
+        "1" => 0x0031,
+        "2" => 0x0032,
+        "3" => 0x0033,
+        "4" => 0x0034,
+        "5" => 0x0035,
+        "6" => 0x0036,
+        "7" => 0x0037,
+        "8" => 0x0038,
+        "9" => 0x0039,
         "a" => 0x0061,
         "b" => 0x0062,
         "c" => 0x0063,
@@ -619,7 +706,7 @@ fn resolve_keysym_from_str(s: &str) -> u32 {
     }
 }
 
-fn parse_shortcut_trigger(conn: &RustConnection, id: &'static str, spec: &str) -> Option<ShortcutTrigger> {
+pub fn parse_shortcut_trigger(conn: &RustConnection, id: &str, spec: &str) -> Option<ShortcutTrigger> {
     let lower_parts: Vec<String> = spec.split('+').map(|s| s.trim().to_lowercase()).collect();
     let mut require_ctrl = false;
     let mut require_alt = false;
@@ -639,7 +726,7 @@ fn parse_shortcut_trigger(conn: &RustConnection, id: &'static str, spec: &str) -
     if keysym != 0 {
         if let Some(keycode) = find_keycode_for_keysym(conn, keysym) {
             return Some(ShortcutTrigger {
-                id,
+                id: id.to_string(),
                 keycode,
                 require_ctrl,
                 require_alt,

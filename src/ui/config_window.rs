@@ -15,7 +15,6 @@ use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
 
 use crate::core::action::ActionManager;
-use crate::core::state::load_actions_from_config;
 use crate::core::state_thread::StateDetectorThread;
 use crate::vision::window_tracker::WindowTracker;
 
@@ -216,11 +215,10 @@ fn run_config_window(
                             notification_expire = std::time::Instant::now() + Duration::from_secs(3);
                         } else if bp.event_x >= 160 && bp.event_x <= 280 {
                             // Reload
-                            if let Ok(loaded) = load_actions_from_config("config/states.yaml") {
-                                for a in loaded {
-                                    action_manager.set_action_enabled(&a.name, a.enabled);
-                                }
+                            if action_manager.reload_from_yaml("config/states.yaml").is_ok() {
                                 notification_msg = "Reloaded config from states.yaml".to_string();
+                            } else {
+                                notification_msg = "Error reloading states.yaml".to_string();
                             }
                             notification_expire = std::time::Instant::now() + Duration::from_secs(3);
                         }
@@ -262,11 +260,10 @@ fn run_config_window(
                         }
                         27 => {
                             // 'R' -> Reload
-                            if let Ok(loaded) = load_actions_from_config("config/states.yaml") {
-                                for a in loaded {
-                                    action_manager.set_action_enabled(&a.name, a.enabled);
-                                }
+                            if action_manager.reload_from_yaml("config/states.yaml").is_ok() {
                                 notification_msg = "Reloaded config from states.yaml".to_string();
+                            } else {
+                                notification_msg = "Error reloading states.yaml".to_string();
                             }
                             notification_expire = std::time::Instant::now() + Duration::from_secs(3);
                         }
@@ -462,9 +459,23 @@ fn save_actions_to_yaml(manager: &ActionManager, yaml_path: &str) -> bool {
     };
 
     let updated_actions = manager.list_actions();
-    if let Ok(actions_value) = serde_yaml::to_value(updated_actions) {
-        if let Some(map) = cfg.as_mapping_mut() {
-            map.insert(serde_yaml::Value::String("actions".to_string()), actions_value);
+    if let Some(map) = cfg.as_mapping_mut() {
+        if let Some(actions_seq) = map.get_mut(&serde_yaml::Value::String("actions".to_string())).and_then(|v| v.as_sequence_mut()) {
+            for act_val in actions_seq.iter_mut() {
+                if let Some(act_map) = act_val.as_mapping_mut() {
+                    let name_opt = act_map.get(&serde_yaml::Value::String("name".to_string()))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    if let Some(name) = name_opt {
+                        if let Some(action) = updated_actions.iter().find(|a| a.name.eq_ignore_ascii_case(&name)) {
+                            act_map.insert(
+                                serde_yaml::Value::String("enabled".to_string()),
+                                serde_yaml::Value::Bool(action.enabled),
+                            );
+                        }
+                    }
+                }
+            }
             if let Ok(updated_str) = serde_yaml::to_string(&cfg) {
                 return std::fs::write(yaml_path, updated_str).is_ok();
             }

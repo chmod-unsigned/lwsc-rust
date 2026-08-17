@@ -95,6 +95,13 @@ impl GameBot {
                     println!("  {:<15} : Open / Toggle Native Configuration & Action Manager Window", shortcuts.open_config.green().bold());
                     println!("  {:<15} : Force immediate State Detection pass", shortcuts.force_detect.green().bold());
                     println!("  {:<15} : Display this Shortcuts Help", shortcuts.show_help.green().bold());
+                    let act_shortcuts = am_clone.get_shortcuts();
+                    if !act_shortcuts.is_empty() {
+                        println!("{}", "\n=== Action-Specific Shortcuts ===".bright_blue().bold());
+                        for (act_name, spec) in act_shortcuts {
+                            println!("  {:<15} : Execute action '{}'", spec.green().bold(), act_name.yellow());
+                        }
+                    }
                     println!("  {:<15} : Gracefully stop and exit", "Ctrl+C".green().bold());
                 }
                 "force_detect" | "ctrl_s" => {
@@ -107,6 +114,49 @@ impl GameBot {
                         println!("{}", "\n[Bot Status] ⏸️  PAUSED - Automated actions suspended".yellow().bold());
                     } else {
                         println!("{}", "\n[Bot Status] ▶️  RESUMED - Automated actions active".green().bold());
+                    }
+                }
+                s if s.starts_with("action:") => {
+                    let action_name = s.strip_prefix("action:").unwrap();
+                    println!("{}", format!("\n[Action Shortcut] Triggering action '{}'...", action_name).cyan().bold());
+                    let win = wt_clone_for_hk.get_window_info();
+                    if !win.is_found {
+                        println!("{}", "[Action Shortcut] Error: Game window not found".red());
+                        return;
+                    }
+
+                    let capturer = crate::vision::ScreenCapturer::new();
+                    if let Some(frame) = capturer.capture_roi(win.x, win.y, win.width, win.height) {
+                        let current_state = st_clone_for_hk.get_current_state();
+                        let mut matcher = crate::vision::matching::TemplateMatcher::new(".");
+                        if let Some(action_res) = am_clone.execute_single_action(
+                            action_name,
+                            current_state,
+                            &frame,
+                            &mut matcher,
+                            true, // bypass cooldown when triggered directly via manual shortcut
+                        ) {
+                            if action_res.executed {
+                                if let Some((cx, cy)) = action_res.click_coords {
+                                    let screen_x = win.x + cx;
+                                    let screen_y = win.y + cy;
+                                    println!(
+                                        "{}",
+                                        format!(
+                                            "[Action Shortcut] Action '{}' executed -> Clicking at ({}, {}) [save_cursor: {}]",
+                                            action_name, screen_x, screen_y, action_res.save_cursor
+                                        ).green().bold()
+                                    );
+                                    crate::io::input::send_x11_click_ex(screen_x as i16, screen_y as i16, action_res.save_cursor);
+                                    st_clone_for_hk.trigger_on_activity("manual_action_click", Duration::from_millis(150), false);
+                                }
+                            } else {
+                                println!(
+                                    "{}",
+                                    format!("[Action Shortcut] Action '{}' not executed: {}", action_name, action_res.reason).yellow()
+                                );
+                            }
+                        }
                     }
                 }
                 _ => {}

@@ -29,6 +29,11 @@ pub struct ButtonDefinition {
     /// Path to template image under roi/
     pub template: String,
 
+    /// Optional specific template name/path to click when multiple templates exist in expected/
+    /// e.g. "claim.png", "button.png", or "roi/LOOT_BUTTON/expected/claim.png"
+    #[serde(default)]
+    pub click_template: Option<String>,
+
     /// Normalized Region Of Interest (0.0 .. 1.0)
     pub roi: Option<NormalizedROI>,
 
@@ -39,6 +44,10 @@ pub struct ButtonDefinition {
     /// Whether to restore previous cursor position after clicking this button (default: false)
     #[serde(default)]
     pub save_cursor: bool,
+
+    /// Optional shortcut key trigger (e.g. "ctrl+1", "f1", "alt+h")
+    #[serde(default)]
+    pub shortcut: Option<String>,
 
     /// Optional description
     pub description: Option<String>,
@@ -67,6 +76,38 @@ impl ButtonDefinition {
             vec![self.template.clone()]
         }
     }
+}
+
+/// Selects the matching template result to click from a list of matched templates.
+/// If `click_template` is specified, finds the matching template by full path, relative path,
+/// or filename (with or without extension). Otherwise, defaults to the first match.
+pub fn select_click_match<'a, T>(
+    matches: &'a [(String, T)],
+    click_template: Option<&str>,
+) -> Option<&'a T> {
+    if matches.is_empty() {
+        return None;
+    }
+    if let Some(target) = click_template {
+        let target_clean = target.trim();
+        if let Some((_, m)) = matches.iter().find(|(path, _)| {
+            path == target_clean
+                || path.ends_with(target_clean)
+                || std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .map(|f| {
+                        f.eq_ignore_ascii_case(target_clean)
+                            || f.strip_suffix(".png").unwrap_or(f).eq_ignore_ascii_case(target_clean)
+                            || f.strip_suffix(".jpg").unwrap_or(f).eq_ignore_ascii_case(target_clean)
+                            || f.strip_suffix(".jpeg").unwrap_or(f).eq_ignore_ascii_case(target_clean)
+                    })
+                    .unwrap_or(false)
+        }) {
+            return Some(m);
+        }
+    }
+    Some(&matches[0].1)
 }
 
 /// Result of a button detected on the current screen.

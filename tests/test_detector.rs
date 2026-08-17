@@ -130,3 +130,36 @@ fn test_detector_matches_radar_tasks_expected_directory() {
     assert_eq!(res.root_state, Some(GameState::Base));
     assert!(res.confidence >= 0.85);
 }
+
+#[test]
+fn test_detector_matches_main_shop_mall_states() {
+    let mut detector = StateDetector::new(".");
+
+    for def in &detector.definitions {
+        if def.state == GameState::MainShopMallHotSalePacks || def.state == GameState::MainShopMallOfficialEvent {
+            println!("State {:?} templates: {:?}", def.state, def.resolved_templates());
+        }
+    }
+
+    // 1. Hot Sale Packs
+    let hot_sale_screen = "roi/MAIN_SHOP_MALL_HOT_SALE_PACKS/screen.png";
+    if std::path::Path::new(hot_sale_screen).exists() {
+        let img = image::open(hot_sale_screen).expect("open hot sale packs screen").to_rgba8();
+        let res = detector.detect(&img);
+        println!("\nHot Sale Screen detected as: {:?} (conf: {:.2}%)", res.state, res.confidence * 100.0);
+        assert_eq!(res.state, GameState::MainShopMallHotSalePacks);
+        assert_eq!(res.root_state, Some(GameState::Base));
+        assert!(res.confidence >= 0.85);
+    }
+
+    // 2. Official Event
+    let event_screen = "roi/MAIN_SHOP_MALL_OFFICIAL_EVENT/screen.png";
+    if std::path::Path::new(event_screen).exists() {
+        let img = image::open(event_screen).expect("open official event screen").to_rgba8();
+        let res = detector.detect(&img);
+        println!("\nOfficial Event Screen detected as: {:?} (conf: {:.2}%)", res.state, res.confidence * 100.0);
+        assert_eq!(res.state, GameState::MainShopMallOfficialEvent);
+        assert_eq!(res.root_state, Some(GameState::Base));
+        assert!(res.confidence >= 0.85);
+    }
+}

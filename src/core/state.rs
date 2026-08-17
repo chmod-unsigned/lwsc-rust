@@ -22,6 +22,8 @@ pub enum GameState {
     MainShop,
     MainShopHotDeals,
     MainShopMall,
+    MainShopMallHotSalePacks,
+    MainShopMallOfficialEvent,
     Alliance,
     AllianceGiftsRegular,
     AllianceGiftsPremium,
@@ -29,6 +31,9 @@ pub enum GameState {
     SearchSpecial,
     RadarTasks,
     Mail,
+    Loot,
+    Inventory,
+    InventorySpecial,
 }
 
 impl GameState {
@@ -86,6 +91,8 @@ impl GameState {
             GameState::MainShop => "MAIN_SHOP",
             GameState::MainShopHotDeals => "MAIN_SHOP_HOT_DEALS",
             GameState::MainShopMall => "MAIN_SHOP_MALL",
+            GameState::MainShopMallHotSalePacks => "MAIN_SHOP_MALL_HOT_SALE_PACKS",
+            GameState::MainShopMallOfficialEvent => "MAIN_SHOP_MALL_OFFICIAL_EVENT",
             GameState::Alliance => "ALLIANCE",
             GameState::AllianceGiftsRegular => "ALLIANCE_GIFTS_REGULAR",
             GameState::AllianceGiftsPremium => "ALLIANCE_GIFTS_PREMIUM",
@@ -93,6 +100,9 @@ impl GameState {
             GameState::SearchSpecial => "SEARCH_SPECIAL",
             GameState::RadarTasks => "RADAR_TASKS",
             GameState::Mail => "MAIL",
+            GameState::Loot => "LOOT",
+            GameState::Inventory => "INVENTORY",
+            GameState::InventorySpecial => "INVENTORY_SPECIAL",
         }
     }
 
@@ -106,6 +116,8 @@ impl GameState {
             "MAIN_SHOP" => Some(GameState::MainShop),
             "MAIN_SHOP_HOT_DEALS" => Some(GameState::MainShopHotDeals),
             "MAIN_SHOP_MALL" => Some(GameState::MainShopMall),
+            "MAIN_SHOP_MALL_HOT_SALE_PACKS" | "MAIN_SHOP_HOT_SALE_PACKS" => Some(GameState::MainShopMallHotSalePacks),
+            "MAIN_SHOP_MALL_OFFICIAL_EVENT" | "MAIN_SHOP_MAIN_OFFICIAL_EVENT" | "MAIN_SHOP_OFFICIAL_EVENT" => Some(GameState::MainShopMallOfficialEvent),
             "ALLIANCE" => Some(GameState::Alliance),
             "ALLIANCE_GIFTS_REGULAR" | "ALLIANCE_GIFTS" | "ALLIANCE_GIFT" => Some(GameState::AllianceGiftsRegular),
             "ALLIANCE_GIFTS_PREMIUM" | "ALLIANCE_GIFTS_RARE" | "ALLIANCE_GIFT_PREMIUM" => Some(GameState::AllianceGiftsPremium),
@@ -113,6 +125,9 @@ impl GameState {
             "SEARCH_SPECIAL" => Some(GameState::SearchSpecial),
             "RADAR_TASKS" | "RADAR_TASK" => Some(GameState::RadarTasks),
             "MAIL" => Some(GameState::Mail),
+            "LOOT" => Some(GameState::Loot),
+            "INVENTORY" => Some(GameState::Inventory),
+            "INVENTORY_SPECIAL" => Some(GameState::InventorySpecial),
             _ => None,
         }
     }

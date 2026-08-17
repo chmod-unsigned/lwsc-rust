@@ -145,7 +145,7 @@ impl StateDetector {
             let roi_px = btn.roi.map(|r| r.to_pixel_box(w, h));
             let mut all_matched = true;
             let mut min_confidence = 1.0f32;
-            let mut primary_match = None;
+            let mut matches = Vec::new();
 
             for template in &templates {
                 let match_res = self.matcher.find_match(
@@ -163,13 +163,11 @@ impl StateDetector {
                 if match_res.confidence < min_confidence {
                     min_confidence = match_res.confidence;
                 }
-                if primary_match.is_none() {
-                    primary_match = Some(match_res);
-                }
+                matches.push((template.clone(), match_res));
             }
 
-            if all_matched {
-                if let Some(match_res) = primary_match {
+            if all_matched && !matches.is_empty() {
+                if let Some(click_match) = crate::core::button::select_click_match(&matches, btn.click_template.as_deref()) {
                     detected.push(ButtonDetection {
                         id: btn.id.clone(),
                         display_name: btn.display_name.clone(),
@@ -177,12 +175,12 @@ impl StateDetector {
                         confidence: min_confidence,
                         matched_template: templates.join(", "),
                         match_box: (
-                            match_res.box_x,
-                            match_res.box_y,
-                            match_res.width,
-                            match_res.height,
+                            click_match.box_x,
+                            click_match.box_y,
+                            click_match.width,
+                            click_match.height,
                         ),
-                        match_center: (match_res.center_x as i32, match_res.center_y as i32),
+                        match_center: (click_match.center_x as i32, click_match.center_y as i32),
                         save_cursor: btn.save_cursor,
                     });
                 }
@@ -228,10 +226,7 @@ impl StateDetector {
         let detected_root_res = self.detect_root(screen);
         let resolved_root = detected_root_res.as_ref().map(|r| r.state).or(last_known_root);
 
-        // 2. Detect visible buttons (e.g. HELP, MAIN_SHOP, ALLIANCE_GIFTS_BUTTON)
-        let visible_buttons = self.detect_buttons(screen, None);
-
-        // 3. Check for overlays: Popup -> SubModal -> Modal
+        // 2. Check for overlays: Popup -> SubModal -> Modal
         let overlay_layers = [
             StateType::Popup,
             StateType::SubModal,
@@ -288,7 +283,7 @@ impl StateDetector {
                                 state_type: defn.state_type,
                                 root_state: root_for_modal,
                                 modal_state: Some(defn.state),
-                                visible_buttons: visible_buttons.clone(),
+                                visible_buttons: Vec::new(),
                                 confidence: min_confidence,
                                 matched_template: Some(templates.join(", ")),
                                 match_box: Some((
@@ -305,19 +300,21 @@ impl StateDetector {
                 }
             }
 
-            if let Some(matched) = best_in_layer {
+            if let Some(mut matched) = best_in_layer {
+                matched.visible_buttons = self.detect_buttons(screen, Some(matched.state));
                 return matched;
             }
         }
 
-        // 4. If no modal is active, return the detected root state with visible buttons
+        // 3. If no modal is active, return the detected root state with visible buttons matching the root state
         if let Some(mut root_res) = detected_root_res {
             root_res.modal_state = None;
-            root_res.visible_buttons = visible_buttons;
+            root_res.visible_buttons = self.detect_buttons(screen, Some(root_res.state));
             return root_res;
         }
 
-        // 5. Fallback if completely unknown
+        // 4. Fallback if completely unknown
+        let visible_buttons = self.detect_buttons(screen, resolved_root);
         DetectionResult {
             state: resolved_root.unwrap_or(GameState::Unknown),
             state_type: if resolved_root.is_some() { StateType::Root } else { StateType::Special },
