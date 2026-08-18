@@ -85,6 +85,19 @@ impl InputManager {
                         }
                     }
 
+                    // Dynamically register sequence shortcuts
+                    if let Ok(sequences) = crate::core::state::load_sequences_from_config("config/states.yaml") {
+                        for seq in sequences {
+                            if let Some(ref spec) = seq.shortcut {
+                                let trigger_id = format!("sequence:{}", seq.name);
+                                if let Some(trig) = parse_shortcut_trigger(&conn, &trigger_id, spec) {
+                                    println!("[InputManager] Registered sequence shortcut: {} ➔ {}", spec, seq.name);
+                                    triggers.push(trig);
+                                }
+                            }
+                        }
+                    }
+
                     // Initial keymap state
                     if let Ok(cookie) = conn.query_keymap() {
                         if let Ok(reply) = cookie.reply() {
@@ -206,8 +219,8 @@ impl InputManager {
         settle_delay: Duration,
         wait_detection: bool,
     ) -> Option<DetectionResult> {
+        let win = self.window_tracker.get_window_info();
         let (target_x, target_y) = if relative {
-            let win = self.window_tracker.get_window_info();
             (win.x + x, win.y + y)
         } else {
             (x, y)
@@ -217,7 +230,7 @@ impl InputManager {
             "[Bot Click] Executing native X11 click at screen coords ({}, {}) (save_cursor: {})",
             target_x, target_y, save_cursor
         );
-        send_x11_click_ex(target_x as i16, target_y as i16, save_cursor);
+        send_x11_click_ex(win.window_id, target_x as i16, target_y as i16, save_cursor);
         
         self.state_thread.trigger_on_activity("bot_click", settle_delay, wait_detection)
     }
@@ -409,20 +422,21 @@ pub fn generate_human_path(
 
 /// RAII Guard that temporarily isolates physical mouse pointer input during bot actions
 /// ensuring physical user movements do not perturb the bot's human Bézier trajectory or click.
-#[allow(dead_code)]
 pub struct InputGrabGuard<'a> {
     conn: &'a RustConnection,
-    grabbed: bool,
+    grabbed_pointer: bool,
+    grabbed_keyboard: bool,
 }
 
-#[allow(dead_code)]
 impl<'a> InputGrabGuard<'a> {
-    pub fn grab_pointer(conn: &'a RustConnection, root: u32) -> Self {
+    pub fn grab_both(conn: &'a RustConnection, target_window: Option<u32>, root: u32) -> Self {
         use x11rb::protocol::xproto::{EventMask, GrabMode, GrabStatus, ConnectionExt};
 
-        let grabbed = if let Ok(cookie) = conn.grab_pointer(
+        let grab_win = target_window.unwrap_or(root);
+
+        let grabbed_pointer = if let Ok(cookie) = conn.grab_pointer(
             false,
-            root,
+            grab_win,
             EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
             GrabMode::ASYNC,
             GrabMode::ASYNC,
@@ -439,16 +453,55 @@ impl<'a> InputGrabGuard<'a> {
             false
         };
 
+        let grabbed_keyboard = if let Ok(cookie) = conn.grab_keyboard(
+            false,
+            grab_win,
+            x11rb::CURRENT_TIME,
+            GrabMode::ASYNC,
+            GrabMode::ASYNC,
+        ) {
+            if let Ok(reply) = cookie.reply() {
+                reply.status == GrabStatus::SUCCESS
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         let _ = conn.flush();
-        Self { conn, grabbed }
+        Self { conn, grabbed_pointer, grabbed_keyboard }
+    }
+
+    pub fn ungrab_pointer(&mut self) {
+        if self.grabbed_pointer {
+            use x11rb::protocol::xproto::ConnectionExt;
+            let _ = self.conn.ungrab_pointer(x11rb::CURRENT_TIME);
+            let _ = self.conn.flush();
+            self.grabbed_pointer = false;
+        }
+    }
+
+    pub fn ungrab_keyboard(&mut self) {
+        if self.grabbed_keyboard {
+            use x11rb::protocol::xproto::ConnectionExt;
+            let _ = self.conn.ungrab_keyboard(x11rb::CURRENT_TIME);
+            let _ = self.conn.flush();
+            self.grabbed_keyboard = false;
+        }
     }
 }
 
 impl<'a> Drop for InputGrabGuard<'a> {
     fn drop(&mut self) {
-        if self.grabbed {
-            use x11rb::protocol::xproto::ConnectionExt;
+        use x11rb::protocol::xproto::ConnectionExt;
+        if self.grabbed_pointer {
             let _ = self.conn.ungrab_pointer(x11rb::CURRENT_TIME);
+        }
+        if self.grabbed_keyboard {
+            let _ = self.conn.ungrab_keyboard(x11rb::CURRENT_TIME);
+        }
+        if self.grabbed_pointer || self.grabbed_keyboard {
             let _ = self.conn.flush();
         }
     }
@@ -457,12 +510,13 @@ impl<'a> Drop for InputGrabGuard<'a> {
 /// Dispatches native hardware-level mouse click to X11 via human-like Bézier movement in <300ms.
 /// If `save_cursor` is true, the cursor position is recorded prior to movement and restored immediately after.
 /// Automatically isolates physical mouse movements during the motion to avoid interference.
-pub fn send_x11_click_ex(target_x: i16, target_y: i16, save_cursor: bool) -> bool {
+pub fn send_x11_click_ex(target_window: Option<u32>, target_x: i16, target_y: i16, save_cursor: bool) -> bool {
     use x11rb::protocol::xtest::ConnectionExt;
     use x11rb::protocol::xproto::ConnectionExt as XProtoExt;
 
     if let Ok((conn, screen_num)) = RustConnection::connect(None) {
         let root = conn.setup().roots[screen_num].root;
+        let mut guard = InputGrabGuard::grab_both(&conn, target_window, root);
 
         // 1. Capture OLD pointer position before moving
         let current_pos = if let Ok(cookie) = conn.query_pointer(root) {
@@ -499,6 +553,10 @@ pub fn send_x11_click_ex(target_x: i16, target_y: i16, save_cursor: bool) -> boo
         let pre_click_ms = rng.gen_range_u64(20, 35);
         thread::sleep(Duration::from_millis(pre_click_ms));
 
+        // Ungrab the pointer BEFORE the click so the XTest event correctly reaches the target game window.
+        // If we keep it grabbed, the X server routes the synthetic event to the grabbing client (us) instead!
+        guard.ungrab_pointer();
+
         // 4. Button 1 press (ButtonPress = 4, detail = 1)
         let _ = conn.xtest_fake_input(4, 1, 0, root, target_x, target_y, 0);
         let _ = conn.flush();
@@ -534,16 +592,17 @@ pub fn send_x11_click_ex(target_x: i16, target_y: i16, save_cursor: bool) -> boo
 }
 
 /// Dispatches native hardware-level mouse click to X11 via XTest extension
-pub fn send_x11_click(target_x: i16, target_y: i16) -> bool {
-    send_x11_click_ex(target_x, target_y, false)
+pub fn send_x11_click(target_window: Option<u32>, target_x: i16, target_y: i16) -> bool {
+    send_x11_click_ex(target_window, target_x, target_y, false)
 }
 
 /// Dispatches native keyboard key press and release to X11 via XTest extension
-pub fn send_x11_key(key_name: &str) -> bool {
+pub fn send_x11_key(target_window: Option<u32>, key_name: &str) -> bool {
     use x11rb::protocol::xtest::ConnectionExt;
 
     if let Ok((conn, screen_num)) = RustConnection::connect(None) {
         let root = conn.setup().roots[screen_num].root;
+        let mut guard = InputGrabGuard::grab_both(&conn, target_window, root);
         let keysym = match key_name.to_lowercase().as_str() {
             "escape" | "esc" => 0xff1b,
             "return" | "enter" => 0xff0d,
@@ -554,6 +613,9 @@ pub fn send_x11_key(key_name: &str) -> bool {
 
         if keysym != 0 {
             if let Some(keycode) = find_keycode_for_keysym(&conn, keysym) {
+                // Ungrab the keyboard BEFORE the key press so the target window receives it.
+                guard.ungrab_keyboard();
+                
                 // KeyPress = 2, KeyRelease = 3
                 let _ = conn.xtest_fake_input(2, keycode, 0, root, 0, 0, 0);
                 let _ = conn.flush();

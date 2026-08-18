@@ -228,47 +228,86 @@ pub struct ActionExecutionResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SequenceStep {
+    pub action: String,
+    #[serde(default = "default_timeout")]
+    pub timeout_s: f32,
+}
+
+fn default_timeout() -> f32 {
+    5.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SequenceDefinition {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub shortcut: Option<String>,
+    #[serde(default)]
+    pub steps: Vec<SequenceStep>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveSequenceState {
+    pub sequence_name: String,
+    pub current_step_index: usize,
+    pub step_start_time: Instant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionsConfigFile {
     #[serde(default)]
     pub actions: Vec<ActionDefinition>,
     #[serde(default)]
     pub buttons: Vec<crate::core::button::ButtonDefinition>,
+    #[serde(default)]
+    pub sequences: Vec<SequenceDefinition>,
 }
 
 pub struct ActionManager {
     actions: RwLock<Vec<ActionDefinition>>,
+    sequences: RwLock<Vec<SequenceDefinition>>,
+    active_sequence: RwLock<Option<ActiveSequenceState>>,
 }
 
 impl ActionManager {
-    pub fn new(actions: Vec<ActionDefinition>) -> Self {
+    pub fn new(actions: Vec<ActionDefinition>, sequences: Vec<SequenceDefinition>) -> Self {
         Self {
             actions: RwLock::new(actions),
+            sequences: RwLock::new(sequences),
+            active_sequence: RwLock::new(None),
         }
     }
 
-    pub fn new_with_buttons(mut actions: Vec<ActionDefinition>, buttons: &[crate::core::button::ButtonDefinition]) -> Self {
+    pub fn new_with_buttons(mut actions: Vec<ActionDefinition>, buttons: &[crate::core::button::ButtonDefinition], sequences: Vec<SequenceDefinition>) -> Self {
         for action in actions.iter_mut() {
             action.resolve_button(buttons);
         }
-        Self::new(actions)
+        Self::new(actions, sequences)
     }
 
     pub fn load_from_yaml<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
-        let content = std::fs::read_to_string(path)?;
+        let content = std::fs::read_to_string(path.as_ref())?;
         let parsed: ActionsConfigFile = serde_yaml::from_str(&content)?;
         let mut actions = parsed.actions;
         for action in actions.iter_mut() {
             action.resolve_button(&parsed.buttons);
         }
-        Ok(Self::new(actions))
+        Ok(Self::new(actions, parsed.sequences))
     }
 
     /// Reloads all actions and button references from YAML configuration file,
     /// updating cooldowns, priorities, templates, shortcuts, enabled states, etc.,
     /// while preserving runtime cooldown execution timestamps (`last_executed`).
     pub fn reload_from_yaml<P: AsRef<Path>>(&self, path: P) -> Result<(), Box<dyn std::error::Error>> {
-        let loaded = crate::core::state::load_actions_from_config(path)?;
+        let loaded_actions = crate::core::state::load_actions_from_config(path.as_ref())?;
+        let loaded_sequences = crate::core::state::load_sequences_from_config(path.as_ref()).unwrap_or_default();
         let mut list = self.actions.write().unwrap();
+        let mut seq_list = self.sequences.write().unwrap();
 
         // Build map of existing last_executed timestamps
         let mut last_exec_map = std::collections::HashMap::new();
@@ -278,7 +317,7 @@ impl ActionManager {
             }
         }
 
-        let mut new_list = loaded;
+        let mut new_list = loaded_actions;
         for action in new_list.iter_mut() {
             if let Some(ts) = last_exec_map.get(&action.name.to_lowercase()) {
                 action.last_executed = Some(*ts);
@@ -286,6 +325,7 @@ impl ActionManager {
         }
 
         *list = new_list;
+        *seq_list = loaded_sequences;
         Ok(())
     }
 
@@ -311,12 +351,25 @@ impl ActionManager {
             .unwrap_or(false)
     }
 
-    /// Returns list of all defined action shortcuts as `(action_name, shortcut_spec)`
+    /// Returns list of all defined action shortcuts as `(trigger_id, shortcut_spec)`
     pub fn get_shortcuts(&self) -> Vec<(String, String)> {
+        let mut shortcuts = Vec::new();
+        
         let list = self.actions.read().unwrap();
-        list.iter()
-            .filter_map(|a| a.shortcut.as_ref().map(|s| (a.name.clone(), s.clone())))
-            .collect()
+        for a in list.iter() {
+            if let Some(ref s) = a.shortcut {
+                shortcuts.push((format!("action:{}", a.name), s.clone()));
+            }
+        }
+
+        let seqs = self.sequences.read().unwrap();
+        for seq in seqs.iter() {
+            if let Some(ref s) = seq.shortcut {
+                shortcuts.push((format!("sequence:{}", seq.name), s.clone()));
+            }
+        }
+
+        shortcuts
     }
 
     /// Directly evaluates and executes a single action by name (e.g. triggered via manual keyboard shortcut).
@@ -492,6 +545,74 @@ impl ActionManager {
 
     /// Evaluates all active actions against the current screen and state.
     /// Checks ROI bounds, template matching within ROI, and cooldowns.
+
+    pub fn trigger_sequence(&self, name: &str) -> bool {
+        let seqs = self.sequences.read().unwrap();
+        if let Some(seq) = seqs.iter().find(|s| s.name.eq_ignore_ascii_case(name)) {
+            if seq.enabled && !seq.steps.is_empty() {
+                let mut active = self.active_sequence.write().unwrap();
+                *active = Some(ActiveSequenceState {
+                    sequence_name: seq.name.clone(),
+                    current_step_index: 0,
+                    step_start_time: std::time::Instant::now(),
+                });
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn evaluate_sequence(
+        &self,
+        current_state: GameState,
+        screen: &image::RgbaImage,
+        matcher: &mut crate::vision::matching::TemplateMatcher,
+    ) -> Option<ActionExecutionResult> {
+        let mut active_lock = self.active_sequence.write().unwrap();
+        let active_state = active_lock.clone()?;
+
+        let seqs = self.sequences.read().unwrap();
+        let seq = seqs.iter().find(|s| s.name == active_state.sequence_name)?;
+
+        if active_state.current_step_index >= seq.steps.len() {
+            *active_lock = None;
+            return None;
+        }
+
+        let step = &seq.steps[active_state.current_step_index];
+        
+        if active_state.step_start_time.elapsed() > std::time::Duration::from_secs_f32(step.timeout_s) {
+            println!("[Sequence] Step {} '{}' timed out after {:.1}s. Aborting sequence '{}'.",
+                active_state.current_step_index, step.action, step.timeout_s, seq.name);
+            *active_lock = None;
+            return None;
+        }
+
+        let res = self.execute_single_action(&step.action, current_state, screen, matcher, true);
+        if let Some(ref r) = res {
+            if r.executed {
+                println!("[Sequence] Executed step {} '{}' of '{}'.", active_state.current_step_index, step.action, seq.name);
+                if active_state.current_step_index + 1 < seq.steps.len() {
+                    let mut new_state = active_state.clone();
+                    new_state.current_step_index += 1;
+                    new_state.step_start_time = std::time::Instant::now();
+                    *active_lock = Some(new_state);
+                } else {
+                    println!("[Sequence] Sequence '{}' completed.", seq.name);
+                    *active_lock = None;
+                }
+            } else {
+                println!("[Sequence Debug] Step '{}' waiting: {}", step.action, r.reason);
+            }
+        } else {
+            println!("[Sequence Debug] Step '{}' waiting (No ActionExecutionResult returned).", step.action);
+        }
+        res
+    }
+
+    pub fn has_active_sequence(&self) -> bool {
+        self.active_sequence.read().unwrap().is_some()
+    }
     pub fn evaluate(
         &self,
         current_state: GameState,

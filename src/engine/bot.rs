@@ -54,7 +54,8 @@ impl GameBot {
 
         // 2. Initialize ActionManager
         let initial_actions = load_actions_from_config("config/states.yaml").unwrap_or_default();
-        let action_manager = Arc::new(ActionManager::new(initial_actions));
+        let initial_sequences = crate::core::state::load_sequences_from_config("config/states.yaml").unwrap_or_default();
+        let action_manager = Arc::new(ActionManager::new(initial_actions, initial_sequences));
 
         // 3. Start StateDetector Thread (triggered on any mouse/keyboard activity & periodically)
         let (state_thread, st_handle) = StateDetectorThread::start(
@@ -147,7 +148,7 @@ impl GameBot {
                                             action_name, screen_x, screen_y, action_res.save_cursor
                                         ).green().bold()
                                     );
-                                    crate::io::input::send_x11_click_ex(screen_x as i16, screen_y as i16, action_res.save_cursor);
+                                    crate::io::input::send_x11_click_ex(win.window_id, screen_x as i16, screen_y as i16, action_res.save_cursor);
                                     st_clone_for_hk.trigger_on_activity("manual_action_click", Duration::from_millis(150), false);
                                 }
                             } else {
@@ -157,6 +158,16 @@ impl GameBot {
                                 );
                             }
                         }
+                    }
+                }
+                s if s.starts_with("sequence:") => {
+                    let seq_name = s.strip_prefix("sequence:").unwrap();
+                    println!("{}", format!("\n[Sequence Shortcut] Triggering sequence '{}'...", seq_name).cyan().bold());
+                    if am_clone.trigger_sequence(seq_name) {
+                        println!("{}", format!("[Sequence] Sequence '{}' started.", seq_name).green());
+                        st_clone_for_hk.trigger_on_activity("sequence_start", Duration::from_millis(50), false);
+                    } else {
+                        println!("{}", format!("[Sequence] Failed to start sequence '{}' (not found or disabled).", seq_name).red());
                     }
                 }
                 _ => {}

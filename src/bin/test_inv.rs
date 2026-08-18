@@ -1,6 +1,11 @@
 use std::path::Path;
 use x11rb::connection::Connection;
 fn main() {
+    match lwsc2::core::state::load_state_definitions("config/states.yaml") {
+        Ok(_) => println!("YAML OK"),
+        Err(e) => println!("YAML ERR: {}", e),
+    }
+
     let (conn, screen_num) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
     let root = conn.setup().roots[screen_num].root;
 

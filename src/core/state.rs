@@ -374,6 +374,8 @@ pub struct StatesConfigFile {
     pub buttons: Vec<crate::core::button::ButtonDefinition>,
     #[serde(default)]
     pub actions: Vec<crate::core::action::ActionDefinition>,
+    #[serde(default)]
+    pub sequences: Vec<crate::core::action::SequenceDefinition>,
 }
 
 pub static STATE_DEFINITIONS: LazyLock<Vec<StateDefinition>> = LazyLock::new(|| {
@@ -419,6 +421,12 @@ pub fn load_actions_from_config<P: AsRef<Path>>(path: P) -> Result<Vec<crate::co
         action.resolve_button(&parsed.buttons);
     }
     Ok(actions)
+}
+
+pub fn load_sequences_from_config<P: AsRef<Path>>(path: P) -> Result<Vec<crate::core::action::SequenceDefinition>, Box<dyn std::error::Error>> {
+    let content = std::fs::read_to_string(path)?;
+    let parsed: StatesConfigFile = serde_yaml::from_str(&content)?;
+    Ok(parsed.sequences)
 }
 
 pub fn load_state_definitions_or_default(custom_path: Option<&str>) -> Vec<StateDefinition> {

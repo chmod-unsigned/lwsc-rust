@@ -327,10 +327,10 @@ buttons:
   target_state: RADAR_TASKS
   template: roi/RADAR_TASKS_BUTTON/expected.png
   roi:
-    xmin: 0.55
-    xmax: 0.67
-    ymin: 0.33
-    ymax: 0.45
+    xmin: 0.43
+    xmax: 0.56
+    ymin: 0.0
+    ymax: 0.11
   min_confidence: 0.75
   save_cursor: false
   description: Radar tasks prompt button appearing on Base and Area screens.
@@ -355,7 +355,7 @@ buttons:
   - LOOT
   target_state: null
   template: roi/LOOT_CLAIM_ALL_BUTTON/expected/
-  click_template: clail_all.png
+  click_template: claim_all.png
   roi:
     xmin: 0.4
     xmax: 0.59
@@ -379,6 +379,20 @@ buttons:
   min_confidence: 0.85
   save_cursor: false
   description: Inventory button appearing on Base and Area screens.
+- id: WORLD_MAP_BUTTON
+  display_name: World Button
+  parent_states:
+  - BASE
+  target_state: AREA
+  template: roi/WORLD_MAP_BUTTON/expected.png
+  roi:
+    xmin: 0.88
+    xmax: 1.0
+    ymin: 0.86
+    ymax: 1.0
+  min_confidence: 0.8
+  save_cursor: false
+  description: Return to area from base
 actions:
 - name: alliance_help
   description: Auto-click Alliance Help button when visible in bottom-right area
@@ -405,7 +419,7 @@ actions:
   shortcut: ctrl+1
 - name: alliance_gift_claim
   description: Auto-claim all available regular alliance gifts
-  enabled: true
+  enabled: false
   button: ALLIANCE_GIFTS_BUTTON
   state: ALLIANCE_GIFTS_REGULAR
   parent_states:
@@ -440,28 +454,28 @@ actions:
     ymin: 0.17
     ymax: 0.29
     xmin: 0.08
-    xmax: 0.20
+    xmax: 0.2
   coords: null
   key_name: null
-  min_confidence: 0.80
+  min_confidence: 0.8
   cooldown_s: 60.0
   priority: 2
   save_cursor: false
   shortcut: ctrl+3
 - name: loot_claim_all
   description: Auto-click Claim All button inside Loot collection modal
-  enabled: true
+  enabled: false
   button: LOOT_CLAIM_ALL_BUTTON
   state: LOOT
   parent_states:
   - LOOT
   action_type: click_template
   template: roi/LOOT_CLAIM_ALL_BUTTON/expected/
-  click_template: clail_all.png
+  click_template: claim_all.png
   roi: null
   coords: null
   key_name: null
-  min_confidence: 0.80
+  min_confidence: 0.8
   cooldown_s: 3.0
   priority: 2
   save_cursor: false
@@ -489,3 +503,65 @@ actions:
   priority: 3
   save_cursor: false
   shortcut: null
+- name: base_view_from_area
+  description: Go to base view from area
+  template: roi/AREA_BASE_BUTTON/expected.png
+  enabled: false
+  button: AREA_BASE_BUTTON
+  state: null
+  parent_states:
+  - AREA
+  action_type: click_template
+  click_template: null
+  roi: null
+  coords: null
+  key_name: null
+  min_confidence: 0.8
+  cooldown_s: 3.0
+  priority: 3
+  save_cursor: false
+  shortcut: ctrl+b
+- name: base_view_from_world_map
+  description: Go to base view from world map
+  template: roi/WORLD_MAP_BASE_BUTTON/expected.png
+  enabled: false
+  button: WORLD_MAP_BASE_BUTTON
+  state: null
+  parent_states:
+  - WORLD_MAP
+  action_type: click_template
+  roi: null
+  coords: null
+  key_name: null
+  min_confidence: 0.8
+  cooldown_s: 3.0
+  priority: 3
+  save_cursor: false
+  shortcut: ctrl+b
+- name: area_from_base
+  description: Go to area from base and center base
+  template: roi/WORLD_MAP_BUTTON/expected.png
+  enabled: false
+  button: WORLD_MAP_BUTTON
+  state: null
+  parent_states:
+  - BASE
+  action_type: click_template
+  roi: null
+  coords: null
+  key_name: null
+  min_confidence: 0.8
+  cooldown_s: 3.0
+  priority: 3
+  save_cursor: false
+  shortcut: ctrl+w
+sequences:
+- name: sequence_loot_claim
+  description: Claim loot and then click claim all
+  shortcut: ctrl+l
+  enabled: true
+  steps:
+  - action: loot_claim
+    timeout_s: 5.0
+  - action: loot_claim_all
+    timeout_s: 5.0

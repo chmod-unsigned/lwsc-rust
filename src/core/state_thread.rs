@@ -313,8 +313,16 @@ fn perform_detection(
     if is_paused {
         res.display_name = format!("{} [PAUSED]", res.display_name);
     } else if let Some(am) = action_manager {
-        // Evaluate and execute any active automated actions (e.g. alliance_help, gift claims)
-        let action_results = am.evaluate(res.state, &frame, &mut detector.matcher);
+        let mut action_results = Vec::new();
+        if am.has_active_sequence() {
+            if let Some(r) = am.evaluate_sequence(res.state, &frame, &mut detector.matcher) {
+                action_results.push(r);
+            }
+        } else {
+            // Evaluate and execute any active automated actions (e.g. alliance_help, gift claims)
+            action_results = am.evaluate(res.state, &frame, &mut detector.matcher);
+        }
+
         for action_res in action_results {
             if action_res.executed {
                 if let Some((cx, cy)) = action_res.click_coords {
@@ -328,7 +336,7 @@ fn perform_detection(
                         action_res.reason,
                         action_res.save_cursor
                     );
-                    crate::io::input::send_x11_click_ex(screen_x as i16, screen_y as i16, action_res.save_cursor);
+                    crate::io::input::send_x11_click_ex(win.window_id, screen_x as i16, screen_y as i16, action_res.save_cursor);
                 }
             }
         }
