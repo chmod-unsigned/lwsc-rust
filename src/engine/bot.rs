@@ -150,6 +150,46 @@ impl GameBot {
                                     );
                                     crate::io::input::send_x11_click_ex(win.window_id, screen_x as i16, screen_y as i16, action_res.save_cursor);
                                     st_clone_for_hk.trigger_on_activity("manual_action_click", Duration::from_millis(150), false);
+                                } else if let Some(((sx, sy), (ex, ey))) = action_res.drag_coords {
+                                    let screen_sx = win.x + sx;
+                                    let screen_sy = win.y + sy;
+                                    let screen_ex = win.x + ex;
+                                    let screen_ey = win.y + ey;
+                                    println!(
+                                        "{}",
+                                        format!(
+                                            "[Action Shortcut] Action '{}' executed -> Dragging from ({}, {}) to ({}, {}) [save_cursor: {} | duration: {}ms]",
+                                            action_name, screen_sx, screen_sy, screen_ex, screen_ey, action_res.save_cursor, action_res.drag_duration_ms
+                                        ).green().bold()
+                                    );
+                                    
+                                    let has_templates = !action_res.sweep_templates.is_empty();
+                                    let templates = action_res.sweep_templates.clone();
+                                    let mut cb = || -> bool {
+                                        if !has_templates { return false; }
+                                        let capturer = crate::vision::ScreenCapturer::new();
+                                        if let Some(frame) = capturer.capture_region(win.x, win.y, win.width, win.height) {
+                                            for t in &templates {
+                                                let mut matcher = crate::vision::matching::TemplateMatcher::new(".");
+                                                let res = matcher.find_match(&frame, t, 0.7, None);
+                                                if res.matched {
+                                                    println!("\n[Sweep] Found POI '{}' at ({}, {}) with {:.2}% confidence!", t, res.center_x, res.center_y, res.confidence * 100.0);
+                                                    return true;
+                                                }
+                                            }
+                                        }
+                                        false
+                                    };
+
+                                    crate::io::input::send_x11_drag(
+                                        win.window_id, 
+                                        screen_sx as i16, screen_sy as i16, 
+                                        screen_ex as i16, screen_ey as i16, 
+                                        action_res.drag_duration_ms, 
+                                        action_res.save_cursor,
+                                        Some(&mut cb)
+                                    );
+                                    st_clone_for_hk.trigger_on_activity("manual_action_drag", Duration::from_millis(150), false);
                                 }
                             } else {
                                 println!(

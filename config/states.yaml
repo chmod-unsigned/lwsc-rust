@@ -12,9 +12,9 @@ states:
   parent: null
   roi:
     xmin: 0.88
-    xmax: 1.0
+    xmax: 1.00
     ymin: 0.86
-    ymax: 1.0
+    ymax: 1.00
   min_confidence: 0.9
   description: Inner city base view with world map button visible in bottom right.
 - state: AREA
@@ -25,9 +25,9 @@ states:
   parent: null
   roi:
     xmin: 0.88
-    xmax: 1.0
+    xmax: 1.00
     ymin: 0.86
-    ymax: 1.0
+    ymax: 1.00
   min_confidence: 0.9
   description: Area map view around player base with base/headquarter button visible in bottom right.
 - state: WORLD_MAP
@@ -38,9 +38,9 @@ states:
   parent: null
   roi:
     xmin: 0.88
-    xmax: 1.0
+    xmax: 1.00
     ymin: 0.86
-    ymax: 1.0
+    ymax: 1.00
   min_confidence: 0.9
   description: World map view with base/headquarter button visible in bottom right.
 - state: MAIN_SHOP
@@ -66,7 +66,7 @@ states:
   roi:
     xmin: 0.32
     xmax: 0.47
-    ymin: 0.0
+    ymin: 0.00
     ymax: 0.09
   min_confidence: 0.85
   description: Main Shop with Hot Deals tab active.
@@ -93,8 +93,8 @@ states:
   - MAIN_SHOP
   roi:
     xmin: 0.28
-    xmax: 0.6
-    ymin: 0.0
+    xmax: 0.60
+    ymin: 0.00
     ymax: 0.19
   min_confidence: 0.85
   description: Main Shop Mall with Hot Sale Packs tab active.
@@ -108,8 +108,8 @@ states:
   - MAIN_SHOP
   roi:
     xmin: 0.36
-    xmax: 0.6
-    ymin: 0.0
+    xmax: 0.60
+    ymin: 0.00
     ymax: 0.19
   min_confidence: 0.85
   description: Main Shop Mall with Official Event tab active.
@@ -151,7 +151,7 @@ states:
   roi:
     xmin: 0.28
     xmax: 0.54
-    ymin: 0.0
+    ymin: 0.00
     ymax: 0.09
   min_confidence: 0.85
   description: Radar mission list and rewards view opened via the radar tasks button.
@@ -164,7 +164,7 @@ states:
   - AREA
   roi:
     xmin: 0.89
-    xmax: 1.0
+    xmax: 1.00
     ymin: 0.71
     ymax: 0.84
   min_confidence: 0.75
@@ -191,8 +191,8 @@ states:
   - ALLIANCE_GIFTS_BUTTON
   roi:
     xmin: 0.28
-    xmax: 0.5
-    ymin: 0.0
+    xmax: 0.50
+    ymin: 0.00
     ymax: 0.33
   min_confidence: 0.85
   description: Alliance regular gifts claim view opened via the gifts button.
@@ -206,7 +206,7 @@ states:
   roi:
     xmin: 0.28
     xmax: 0.67
-    ymin: 0.0
+    ymin: 0.00
     ymax: 0.33
   min_confidence: 0.85
   description: Alliance premium/rare gifts claim view.
@@ -234,7 +234,7 @@ states:
   roi:
     xmin: 0.27
     xmax: 0.46
-    ymin: 0.0
+    ymin: 0.00
     ymax: 0.19
   min_confidence: 0.85
   description: Special tab inside Inventory.
@@ -244,12 +244,12 @@ buttons:
   parent_states:
   - BASE
   - AREA
-  target_state: MAIN_SHOP
+  target_state: MAIN_SHOP_MALL_HOT_SALE_PACKS
   template: roi/MAIN_SHOP_BUTTON/expected.png
   roi:
     xmin: 0.87
-    xmax: 1.0
-    ymin: 0.0
+    xmax: 1.00
+    ymin: 0.00
     ymax: 0.09
   min_confidence: 0.85
   description: Main Shop entrance button on Base and Area screens.
@@ -261,8 +261,8 @@ buttons:
   target_state: ALLIANCE
   template: roi/ALLIANCE_BUTTON/expected.png
   roi:
-    xmin: 0.9
-    xmax: 1.0
+    xmin: 0.90
+    xmax: 1.00
     ymin: 0.63
     ymax: 0.78
   min_confidence: 0.8
@@ -290,7 +290,7 @@ buttons:
   roi:
     xmin: 0.32
     xmax: 0.54
-    ymin: 0.5
+    ymin: 0.50
     ymax: 0.66
   min_confidence: 0.85
   description: Alliance gifts claim button inside Alliance menu leading to regular gifts.
@@ -329,7 +329,7 @@ buttons:
   roi:
     xmin: 0.43
     xmax: 0.56
-    ymin: 0.0
+    ymin: 0.00
     ymax: 0.11
   min_confidence: 0.75
   save_cursor: false
@@ -343,7 +343,7 @@ buttons:
   template: roi/LOOT_BUTTON/expected/
   roi:
     xmin: 0.08
-    xmax: 0.2
+    xmax: 0.20
     ymin: 0.17
     ymax: 0.29
   min_confidence: 0.8
@@ -357,7 +357,7 @@ buttons:
   template: roi/LOOT_CLAIM_ALL_BUTTON/expected/
   click_template: claim_all.png
   roi:
-    xmin: 0.4
+    xmin: 0.40
     xmax: 0.59
     ymin: 0.69
     ymax: 0.83
@@ -372,8 +372,8 @@ buttons:
   target_state: INVENTORY_SPECIAL
   template: roi/INVENTORY_BUTTON/expected/inventory_button.png
   roi:
-    xmin: 0.9
-    xmax: 1.0
+    xmin: 0.90
+    xmax: 1.00
     ymin: 0.79
     ymax: 0.94
   min_confidence: 0.85
@@ -387,13 +387,24 @@ buttons:
   template: roi/WORLD_MAP_BUTTON/expected.png
   roi:
     xmin: 0.88
-    xmax: 1.0
+    xmax: 1.00
     ymin: 0.86
-    ymax: 1.0
+    ymax: 1.00
   min_confidence: 0.8
   save_cursor: false
   description: Return to area from base
 actions:
+- name: main_shop_maill_hot_sale_pack_claim
+  description: Claim Hot Sale Pack from Shop Mall
+  enabled: true
+  button: MAIN_SHOP_MALL_HOT_SALE_PACKS
+  state: null
+  parent_states:
+  - BASE
+  - AREA
+  action_type: click_template
+  clock_template: poi/main_shop_mall_hot_sale_packs/claim_chest.png
+
 - name: alliance_help
   description: Auto-click Alliance Help button when visible in bottom-right area
   enabled: true
@@ -412,11 +423,13 @@ actions:
     xmax: 0.98
   coords: null
   key_name: null
-  min_confidence: 0.85
-  cooldown_s: 2.0
+  min_confidence: 0.8500000238418579
+  cooldown_s: 5.0
   priority: 1
   save_cursor: true
   shortcut: ctrl+1
+  display_name: Alliance Help
+  drag_duration_ms: 1000
 - name: alliance_gift_claim
   description: Auto-claim all available regular alliance gifts
   enabled: false
@@ -434,14 +447,16 @@ actions:
     xmax: 0.54
   coords: null
   key_name: null
-  min_confidence: 0.85
+  min_confidence: 0.8500000238418579
   cooldown_s: 5.0
   priority: 2
   save_cursor: false
   shortcut: ctrl+2
+  display_name: Claim gift from alliance menu
+  drag_duration_ms: 1000
 - name: loot_claim
   description: Auto-claim loot rewards when loot button appears
-  enabled: true
+  enabled: false
   button: LOOT_BUTTON
   state: null
   parent_states:
@@ -457,11 +472,13 @@ actions:
     xmax: 0.2
   coords: null
   key_name: null
-  min_confidence: 0.8
+  min_confidence: 0.800000011920929
   cooldown_s: 60.0
   priority: 2
   save_cursor: false
   shortcut: ctrl+3
+  display_name: Loot button
+  drag_duration_ms: 1000
 - name: loot_claim_all
   description: Auto-click Claim All button inside Loot collection modal
   enabled: false
@@ -475,11 +492,13 @@ actions:
   roi: null
   coords: null
   key_name: null
-  min_confidence: 0.8
+  min_confidence: 0.800000011920929
   cooldown_s: 3.0
   priority: 2
   save_cursor: false
   shortcut: ctrl+4
+  display_name: Loot claim all
+  drag_duration_ms: 1000
 - name: radar_task_claim
   description: Auto-claim radar mission rewards when prompt appears
   enabled: false
@@ -502,7 +521,8 @@ actions:
   cooldown_s: 3.0
   priority: 3
   save_cursor: false
-  shortcut: null
+  display_name: ''
+  drag_duration_ms: 1000
 - name: base_view_from_area
   description: Go to base view from area
   template: roi/AREA_BASE_BUTTON/expected.png
@@ -516,11 +536,13 @@ actions:
   roi: null
   coords: null
   key_name: null
-  min_confidence: 0.8
+  min_confidence: 0.800000011920929
   cooldown_s: 3.0
   priority: 3
   save_cursor: false
   shortcut: ctrl+b
+  display_name: Base view (from Area)
+  drag_duration_ms: 1000
 - name: base_view_from_world_map
   description: Go to base view from world map
   template: roi/WORLD_MAP_BASE_BUTTON/expected.png
@@ -533,11 +555,13 @@ actions:
   roi: null
   coords: null
   key_name: null
-  min_confidence: 0.8
+  min_confidence: 0.800000011920929
   cooldown_s: 3.0
   priority: 3
   save_cursor: false
   shortcut: ctrl+b
+  display_name: Base view (from World)
+  drag_duration_ms: 1000
 - name: area_from_base
   description: Go to area from base and center base
   template: roi/WORLD_MAP_BUTTON/expected.png
@@ -550,12 +574,43 @@ actions:
   roi: null
   coords: null
   key_name: null
-  min_confidence: 0.8
+  min_confidence: 0.800000011920929
   cooldown_s: 3.0
   priority: 3
   save_cursor: false
   shortcut: ctrl+w
+  display_name: Area view
+  drag_duration_ms: 1000
+- name: search_gold_mine
+  description: Search gold mine
+  enabled: false
+  template: poi/gold_mine.png
+  parent_states:
+  - AREA
+  action_type: click_template
+  min_confidence: 0.8500000238418579
+  priority: 1
+  display_name: Gold mine
+  cooldown_s: 0.0
+  drag_duration_ms: 1000
+  save_cursor: false
+
+
 sequences:
+- name: morning_routine
+  description: Morning rooting
+  shortcut: ctrl+m
+  enabled: true
+  steps:
+  - action: loot_claim
+    timeout_s: 5.0
+  - action: loot_claim_all
+    timeout_s: 5.0
+  - action: new_action_10
+    timeout_s: 5.0
+  schedules:
+    every_day:
+    - 04:30
 - name: sequence_loot_claim
   description: Claim loot and then click claim all
   shortcut: ctrl+l
@@ -564,4 +619,20 @@ sequences:
   - action: loot_claim
     timeout_s: 5.0
   - action: loot_claim_all
+    timeout_s: 5.0
+  schedules:
+    every_day:
+    - 00:00
+    - 04:00
+    - 12:00
+    - 16:00
+    - 20:00
+- name: sequence_gold_mine
+  description: Search gold mine
+  shortcut: ctrl+g
+  enabled: true
+  steps:
+  - action: search_gold_mine
+    timeout_s: 5.0
+  - action: new_action_9
     timeout_s: 5.0

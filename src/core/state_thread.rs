@@ -134,6 +134,16 @@ impl StateDetectorThread {
                         continue;
                     }
 
+                    if let Some(am) = am_th.as_ref() {
+                        am.evaluate_schedules();
+                        
+                        if !am.has_active_sequence() {
+                            if let Some(next_seq) = am.pop_sequence_queue() {
+                                am.trigger_sequence(&next_seq);
+                            }
+                        }
+                    }
+
                     let last_root = *current_root_state_th.read().unwrap();
                     let fresh_res = perform_detection(
                         &window_tracker,
@@ -337,6 +347,45 @@ fn perform_detection(
                         action_res.save_cursor
                     );
                     crate::io::input::send_x11_click_ex(win.window_id, screen_x as i16, screen_y as i16, action_res.save_cursor);
+                } else if let Some(((sx, sy), (ex, ey))) = action_res.drag_coords {
+                    let screen_sx = win.x + sx;
+                    let screen_sy = win.y + sy;
+                    let screen_ex = win.x + ex;
+                    let screen_ey = win.y + ey;
+                    println!(
+                        "\n[Auto-Action] '{}' triggered -> Dragging from ({}, {}) to ({}, {}) [{} | save_cursor: {} | duration: {}ms]",
+                        action_res.action_name,
+                        screen_sx,
+                        screen_sy,
+                        screen_ex,
+                        screen_ey,
+                        action_res.reason,
+                        action_res.save_cursor,
+                        action_res.drag_duration_ms
+                    );
+                    let has_templates = !action_res.sweep_templates.is_empty();
+                    let templates = action_res.sweep_templates.clone();
+                    let mut cb = || -> bool {
+                        if !has_templates { return false; }
+                        if let Some(frame) = capturer.capture_region(win.x, win.y, win.width, win.height) {
+                            for t in &templates {
+                                let res = detector.matcher.find_match(&frame, t, 0.7, None);
+                                if res.matched {
+                                    println!("\n[Sweep] Found POI '{}' at ({}, {}) with {:.2}% confidence!", t, res.center_x, res.center_y, res.confidence * 100.0);
+                                    return true;
+                                }
+                            }
+                        }
+                        false
+                    };
+                    crate::io::input::send_x11_drag(
+                        win.window_id, 
+                        screen_sx as i16, screen_sy as i16, 
+                        screen_ex as i16, screen_ey as i16, 
+                        action_res.drag_duration_ms, 
+                        action_res.save_cursor,
+                        Some(&mut cb)
+                    );
                 }
             }
         }

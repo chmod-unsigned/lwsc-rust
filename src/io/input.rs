@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 use x11rb::rust_connection::RustConnection;
+use x11rb::connection::RequestConnection;
+use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
 
 use crate::core::detector::DetectionResult;
 use crate::core::state_thread::StateDetectorThread;
@@ -589,6 +591,127 @@ pub fn send_x11_click_ex(target_window: Option<u32>, target_x: i16, target_y: i1
         return true;
     }
     false
+}
+
+/// Dispatches native hardware-level mouse drag to X11 via XTest extension.
+/// If `sweep_callback` is provided, it is invoked periodically. If it returns true, the drag aborts early.
+pub fn send_x11_drag(
+    target_window: Option<u32>,
+    start_x: i16, start_y: i16,
+    end_x: i16, end_y: i16,
+    duration_ms: u64,
+    save_cursor: bool,
+    mut sweep_callback: Option<&mut dyn FnMut() -> bool>
+) -> bool {
+    let (conn, _screen) = match x11rb::connect(None) {
+        Ok(c) => c,
+        Err(e) => {
+            println!("[InputManager] X11 Connection failed for drag: {}", e);
+            return false;
+        }
+    };
+
+    let extension = match conn.extension_information(x11rb::protocol::xtest::X11_EXTENSION_NAME) {
+        Ok(ext) => ext,
+        Err(_) => return false,
+    };
+
+    if extension.is_none() {
+        println!("[InputManager] XTest extension not available.");
+        return false;
+    }
+
+    let root = match target_window {
+        Some(w) => w,
+        None => conn.setup().roots[0].root,
+    };
+
+    let (orig_x, orig_y) = match conn.query_pointer(root) {
+        Ok(reply) => {
+            if let Ok(ptr) = reply.reply() {
+                (ptr.root_x, ptr.root_y)
+            } else {
+                (start_x, start_y)
+            }
+        }
+        Err(_) => (start_x, start_y),
+    };
+
+    let mut guard = InputGrabGuard::grab_both(&conn, target_window, root);
+
+    // Initial positioning
+    let initial_path = generate_human_path(orig_x, orig_y, start_x, start_y, 160);
+    for (px, py, step_delay) in initial_path {
+        let _ = conn.xtest_fake_input(6, 0, 0, root, px, py, 0);
+        let _ = conn.flush();
+        thread::sleep(step_delay);
+    }
+    let _ = conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, start_x, start_y);
+    let _ = conn.flush();
+
+    let mut rng = SimpleRng::new();
+    let pre_click_ms = rng.gen_range_u64(20, 35);
+    thread::sleep(Duration::from_millis(pre_click_ms));
+
+    // For drag, we can keep the pointer grabbed to prevent user interference, 
+    // but some apps need ungrab to receive the event. Let's ungrab just in case.
+    guard.ungrab_pointer();
+
+    // Button 1 press
+    let _ = conn.xtest_fake_input(4, 1, 0, root, start_x, start_y, 0);
+    let _ = conn.flush();
+    thread::sleep(Duration::from_millis(rng.gen_range_u64(30, 50)));
+
+    // Drag motion interpolation
+    let steps = (duration_ms / 10).max(5); // ~10ms per step
+    let mut aborted = false;
+    for step in 1..=steps {
+        let t = step as f32 / steps as f32;
+        // Ease out quad
+        let ease = 1.0 - (1.0 - t) * (1.0 - t);
+        
+        let cx = start_x as f32 + (end_x as f32 - start_x as f32) * ease;
+        let cy = start_y as f32 + (end_y as f32 - start_y as f32) * ease;
+        
+        let _ = conn.xtest_fake_input(6, 0, 0, root, cx as i16, cy as i16, 0);
+        let _ = conn.flush();
+        thread::sleep(Duration::from_millis(duration_ms / steps));
+        
+        // Periodic callback check for sweeping (every 50-100ms can be enough, but here it's every 10ms step.
+        // We can do it every few steps or every step.)
+        if let Some(ref mut cb) = sweep_callback {
+            if cb() {
+                aborted = true;
+                println!("[InputManager] Drag sweep aborted due to callback.");
+                break;
+            }
+        }
+    }
+    
+    // Ensure final position if not aborted
+    if !aborted {
+        let _ = conn.xtest_fake_input(6, 0, 0, root, end_x, end_y, 0);
+        let _ = conn.flush();
+        thread::sleep(Duration::from_millis(rng.gen_range_u64(40, 60)));
+    }
+
+    // Button 1 release
+    let _ = conn.xtest_fake_input(5, 1, 0, root, end_x, end_y, 0);
+    let _ = conn.flush();
+    thread::sleep(Duration::from_millis(rng.gen_range_u64(35, 55)));
+
+    if save_cursor {
+        let return_path = generate_human_path(end_x, end_y, orig_x, orig_y, 160);
+        for (px, py, step_delay) in return_path {
+            let _ = conn.xtest_fake_input(6, 0, 0, root, px, py, 0);
+            let _ = conn.flush();
+            thread::sleep(step_delay);
+        }
+        let _ = conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, orig_x, orig_y);
+        let _ = conn.flush();
+    }
+
+    true
 }
 
 /// Dispatches native hardware-level mouse click to X11 via XTest extension
