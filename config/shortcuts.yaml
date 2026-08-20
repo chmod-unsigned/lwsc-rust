@@ -1,0 +1,4 @@
+toggle_pause: ctrl+p
+open_config: ctrl+o
+force_detect: ctrl+s
+show_help: ctrl+h

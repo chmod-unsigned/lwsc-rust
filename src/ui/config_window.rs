@@ -7,6 +7,7 @@ use std::thread::{self, JoinHandle};
 use eframe::egui;
 
 use crate::core::action::{ActionManager, SequenceDefinition};
+use crate::core::state::{load_shortcuts_from_config, ShortcutsConfig};
 use crate::core::state_thread::StateDetectorThread;
 use crate::vision::window_tracker::WindowTracker;
 
@@ -41,7 +42,7 @@ impl ConfigWindow {
 
                 let mut options = eframe::NativeOptions {
                     viewport: egui::ViewportBuilder::default()
-                        .with_inner_size([720.0, 540.0])
+                        .with_inner_size([760.0, 580.0])
                         .with_title("LWSC2 - Configuration & Action Manager"),
                     ..Default::default()
                 };
@@ -56,13 +57,10 @@ impl ConfigWindow {
                     }));
                 }
 
-                // No need to instantiate app here anymore, we do it in the Box::new closure
-
                 let result = eframe::run_native(
                     "LWSC2 Configuration",
                     options,
                     Box::new(|cc| {
-                        // Apply a custom GTK-like light theme
                         let mut visuals = eframe::egui::Visuals::light();
                         visuals.window_rounding = 8.0.into();
                         visuals.menu_rounding = 8.0.into();
@@ -71,7 +69,6 @@ impl ConfigWindow {
                         visuals.widgets.hovered.rounding = 4.0.into();
                         visuals.widgets.active.rounding = 4.0.into();
                         
-                        // Subtle gray background like standard desktop windows
                         visuals.window_fill = eframe::egui::Color32::from_rgb(245, 245, 245);
                         visuals.panel_fill = eframe::egui::Color32::from_rgb(245, 245, 245);
                         
@@ -97,9 +94,8 @@ enum ConfigTab {
     Dashboard,
     Actions,
     Sequences,
+    Shortcuts,
 }
-
-// removed unused import
 
 struct Lwsc2ConfigApp {
     action_manager: Arc<ActionManager>,
@@ -111,6 +107,7 @@ struct Lwsc2ConfigApp {
     is_visible: bool,
     sequences: Vec<SequenceDefinition>,
     actions: Vec<crate::core::action::ActionDefinition>,
+    shortcuts: ShortcutsConfig,
 }
 
 impl Lwsc2ConfigApp {
@@ -121,6 +118,7 @@ impl Lwsc2ConfigApp {
     ) -> Self {
         let sequences = action_manager.list_sequences();
         let actions = action_manager.list_actions();
+        let shortcuts = load_shortcuts_from_config("config/shortcuts.yaml");
         Self {
             action_manager,
             state_thread,
@@ -131,6 +129,7 @@ impl Lwsc2ConfigApp {
             is_visible: true,
             sequences,
             actions,
+            shortcuts,
         }
     }
 
@@ -158,7 +157,7 @@ impl eframe::App for Lwsc2ConfigApp {
 
         egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("Save to states.yaml").clicked() {
+                if ui.button("💾 Save Configurations").clicked() {
                     // Propagate edits to ActionManager
                     for seq in &self.sequences {
                         self.action_manager.update_sequence(seq.clone());
@@ -166,24 +165,25 @@ impl eframe::App for Lwsc2ConfigApp {
                     for act in &self.actions {
                         self.action_manager.update_action(act.clone());
                     }
-                    if save_config_to_yaml(&self.action_manager, "config/states.yaml") {
-                        self.notify("Saved configuration to states.yaml");
+                    if save_all_configs(&self.actions, &self.sequences, &self.shortcuts) {
+                        self.notify("Configurations saved successfully!");
                     } else {
-                        self.notify("Error saving to states.yaml");
+                        self.notify("Error saving configuration files");
                     }
                 }
-                if ui.button("Reload config").clicked() {
-                    if self.action_manager.reload_from_yaml("config/states.yaml").is_ok() {
+                if ui.button("🔄 Reload Config").clicked() {
+                    if self.action_manager.reload_from_yaml("config/actions.yaml").is_ok() {
                         self.sequences = self.action_manager.list_sequences();
                         self.actions = self.action_manager.list_actions();
-                        self.notify("Reloaded config from states.yaml");
+                        self.shortcuts = load_shortcuts_from_config("config/shortcuts.yaml");
+                        self.notify("Reloaded configs from disk");
                     } else {
-                        self.notify("Error reloading states.yaml");
+                        self.notify("Error reloading config files");
                     }
                 }
                 ui.add_space(20.0);
                 if !self.notification_msg.is_empty() && std::time::Instant::now() < self.notification_expire {
-                    ui.label(egui::RichText::new(&self.notification_msg).color(egui::Color32::GREEN));
+                    ui.label(egui::RichText::new(&self.notification_msg).color(egui::Color32::from_rgb(0, 150, 0)).strong());
                 }
             });
         });
@@ -194,8 +194,9 @@ impl eframe::App for Lwsc2ConfigApp {
 
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.current_tab, ConfigTab::Dashboard, "Dashboard");
-                ui.selectable_value(&mut self.current_tab, ConfigTab::Actions, "Actions");
-                ui.selectable_value(&mut self.current_tab, ConfigTab::Sequences, "Sequences");
+                ui.selectable_value(&mut self.current_tab, ConfigTab::Actions, "Actions (Touches/Boutons)");
+                ui.selectable_value(&mut self.current_tab, ConfigTab::Sequences, "Sequences (Macros)");
+                ui.selectable_value(&mut self.current_tab, ConfigTab::Shortcuts, "Raccourcis Globaux");
             });
             ui.separator();
 
@@ -213,33 +214,69 @@ impl eframe::App for Lwsc2ConfigApp {
                 }
                 ConfigTab::Actions => {
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.heading("Automated Actions");
-                        for action in self.actions.iter_mut() {
+                        ui.heading("Actions Automatisées & Raccourcis Clavier");
+                        let mut action_to_remove = None;
+                        let mut notify_msg = None;
+                        let current_win = self.window_tracker.get_window_info();
+                        let current_st = self.state_thread.get_current_state();
+
+                        for (idx, action) in self.actions.iter_mut().enumerate() {
                             let label = if !action.display_name.is_empty() {
-                                format!("Action: {} ({})", action.display_name, action.name)
+                                format!("{}. {} [{}]", idx + 1, action.display_name, action.name)
                             } else {
-                                format!("Action: {}", action.name)
+                                format!("{}. [{}]", idx + 1, action.name)
                             };
+
                             egui::CollapsingHeader::new(label)
-                                .id_source(format!("action_header_{}", action.name))
+                                .id_source(format!("action_header_idx_{}", idx))
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        ui.checkbox(&mut action.enabled, "Enabled");
+                                        ui.checkbox(&mut action.enabled, "Enabled (Actif)");
+                                        ui.add_space(20.0);
+                                        if ui.button("🗑 Supprimer l'action").clicked() {
+                                            action_to_remove = Some(idx);
+                                        }
                                     });
+
                                     ui.horizontal(|ui| {
-                                        ui.label("Display Name:");
-                                        ui.text_edit_singleline(&mut action.display_name);
+                                        ui.label("Identifiant YAML (Clé) :");
+                                        ui.add(egui::TextEdit::singleline(&mut action.name).desired_width(180.0));
                                     });
+
                                     ui.horizontal(|ui| {
-                                        ui.label("Description:");
-                                        ui.text_edit_singleline(&mut action.description);
+                                        ui.label("Nom affiché (Display Name) :");
+                                        ui.add(egui::TextEdit::singleline(&mut action.display_name).desired_width(220.0));
                                     });
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Raccourci Clavier (Shortcut) :");
+                                        let mut sc = action.shortcut.clone().unwrap_or_default();
+                                        if ui.add(egui::TextEdit::singleline(&mut sc).desired_width(120.0)).changed() {
+                                            action.shortcut = if sc.trim().is_empty() { None } else { Some(sc.trim().to_string()) };
+                                        }
+                                        ui.label("(ex: ctrl+1, ctrl+b, alt+a)");
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Bouton lié (Button ID) :");
+                                        let mut btn = action.button.clone().unwrap_or_default();
+                                        if ui.add(egui::TextEdit::singleline(&mut btn).desired_width(180.0)).changed() {
+                                            action.button = if btn.trim().is_empty() { None } else { Some(btn.trim().to_string()) };
+                                        }
+                                        ui.label("(Hérite auto du ROI et du template)");
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Description :");
+                                        ui.add(egui::TextEdit::singleline(&mut action.description).desired_width(300.0));
+                                    });
+
                                     ui.separator();
                                     
                                     ui.horizontal(|ui| {
-                                        ui.label("Action Type:");
-                                        egui::ComboBox::from_id_source(format!("type_{}", action.name))
+                                        ui.label("Type d'Action :");
+                                        egui::ComboBox::from_id_source(format!("type_idx_{}", idx))
                                             .selected_text(action.action_type.as_str())
                                             .show_ui(ui, |ui| {
                                                 ui.selectable_value(&mut action.action_type, crate::core::action::ActionType::ClickTemplate, "Click Template");
@@ -252,9 +289,9 @@ impl eframe::App for Lwsc2ConfigApp {
                                     });
 
                                     ui.horizontal(|ui| {
-                                        ui.label("Cooldown (s):");
+                                        ui.label("Cooldown (s) :");
                                         ui.add(egui::DragValue::new(&mut action.cooldown_s).speed(0.1).clamp_range(0.0..=600.0));
-                                        ui.label("Priority:");
+                                        ui.label("Priorité :");
                                         ui.add(egui::DragValue::new(&mut action.priority).speed(1).clamp_range(1..=10));
                                     });
                                     
@@ -279,80 +316,199 @@ impl eframe::App for Lwsc2ConfigApp {
                                             ui.label("Duration (ms):");
                                             ui.add(egui::DragValue::new(&mut action.drag_duration_ms).speed(10.0).clamp_range(100..=10000));
                                         });
+                                    }
+
+                                    if action.action_type == crate::core::action::ActionType::ClickCoords {
                                         ui.horizontal(|ui| {
-                                            ui.label("Scan POI Path:");
-                                            let mut t = action.template.clone().unwrap_or_default();
-                                            if ui.text_edit_singleline(&mut t).changed() {
-                                                if t.is_empty() {
-                                                    action.template = None;
-                                                } else {
-                                                    action.template = Some(t);
-                                                }
+                                            ui.label("Coordonnées (X, Y) :");
+                                            let mut cx = action.coords.map(|c| c.0).unwrap_or(0.5);
+                                            let mut cy = action.coords.map(|c| c.1).unwrap_or(0.5);
+                                            ui.add(egui::DragValue::new(&mut cx).speed(0.01).clamp_range(0.0..=1.0));
+                                            ui.add(egui::DragValue::new(&mut cy).speed(0.01).clamp_range(0.0..=1.0));
+                                            action.coords = Some((cx, cy));
+                                        });
+                                    }
+
+                                    if action.action_type == crate::core::action::ActionType::ClickRoi {
+                                        ui.horizontal(|ui| {
+                                            ui.label("ROI (xmin, xmax, ymin, ymax) :");
+                                            let mut roi = action.roi.unwrap_or_else(|| crate::core::state::NormalizedROI::new(0.0, 1.0, 0.0, 1.0));
+                                            ui.add(egui::DragValue::new(&mut roi.xmin).speed(0.01).clamp_range(0.0..=1.0));
+                                            ui.add(egui::DragValue::new(&mut roi.xmax).speed(0.01).clamp_range(0.0..=1.0));
+                                            ui.add(egui::DragValue::new(&mut roi.ymin).speed(0.01).clamp_range(0.0..=1.0));
+                                            ui.add(egui::DragValue::new(&mut roi.ymax).speed(0.01).clamp_range(0.0..=1.0));
+                                            action.roi = Some(roi);
+                                        });
+                                    }
+
+                                    if action.action_type == crate::core::action::ActionType::KeyPress {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Touche Clavier (Key Name) :");
+                                            let mut key = action.key_name.clone().unwrap_or_default();
+                                            if ui.add(egui::TextEdit::singleline(&mut key).hint_text("ex: Escape, Return, Space").desired_width(140.0)).changed() {
+                                                action.key_name = if key.trim().is_empty() { None } else { Some(key.trim().to_string()) };
                                             }
                                         });
                                     }
                                     
+                                    if action.action_type == crate::core::action::ActionType::Custom {
+                                        ui.group(|ui| {
+                                            ui.label(egui::RichText::new("⚙ Configuration du Script Python").strong());
+                                            
+                                            // Search for python scripts in scripts/ folder
+                                            let mut available_scripts = Vec::new();
+                                            if let Ok(entries) = std::fs::read_dir("scripts") {
+                                                for entry in entries.flatten() {
+                                                    let path = entry.path();
+                                                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                                                        if ext.eq_ignore_ascii_case("py") {
+                                                            available_scripts.push(path.to_string_lossy().to_string());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            available_scripts.sort();
+
+                                            ui.horizontal(|ui| {
+                                                ui.label("Script Python :");
+                                                let mut script_val = action.script.clone().unwrap_or_default();
+                                                if ui.add(egui::TextEdit::singleline(&mut script_val).hint_text("ex: scripts/search_gold_mine.py").desired_width(220.0)).changed() {
+                                                    action.script = if script_val.trim().is_empty() { None } else { Some(script_val.trim().to_string()) };
+                                                }
+
+                                                if !available_scripts.is_empty() {
+                                                    egui::ComboBox::from_id_source(format!("script_combo_{}", idx))
+                                                        .selected_text(action.script.as_deref().unwrap_or("Choisir un script..."))
+                                                        .show_ui(ui, |ui| {
+                                                            for s_path in &available_scripts {
+                                                                let is_sel = action.script.as_deref() == Some(s_path.as_str());
+                                                                if ui.selectable_label(is_sel, s_path).clicked() {
+                                                                    action.script = Some(s_path.clone());
+                                                                }
+                                                            }
+                                                        });
+                                                }
+                                            });
+
+                                            ui.horizontal(|ui| {
+                                                ui.label("Arguments CLI :");
+                                                let mut args_str = action.args.join(" ");
+                                                if ui.add(egui::TextEdit::singleline(&mut args_str).hint_text("ex: --debug --speed 2").desired_width(240.0)).changed() {
+                                                    action.args = args_str.split_whitespace().map(|s| s.to_string()).collect();
+                                                }
+                                                ui.label("(séparés par des espaces)");
+                                            });
+
+                                            ui.horizontal(|ui| {
+                                                if let Some(ref scr) = action.script {
+                                                    if ui.button("▶ Tester l'exécution du script").clicked() {
+                                                        crate::core::action::run_python_script(
+                                                            scr,
+                                                            &action.args,
+                                                            current_win.window_id,
+                                                            Some(current_st.name()),
+                                                            Some("last_screenshot.png"),
+                                                        );
+                                                        notify_msg = Some(format!("Script '{}' exécuté en arrière-plan !", scr));
+                                                    }
+                                                }
+                                            });
+                                        });
+                                    }
+                                    
                                     ui.horizontal(|ui| {
-                                        ui.label("Min Confidence:");
+                                        ui.label("Min Confidence :");
                                         ui.add(egui::DragValue::new(&mut action.min_confidence).speed(0.01).clamp_range(0.1..=1.0));
                                         ui.checkbox(&mut action.save_cursor, "Save Cursor");
                                     });
-
-                                    ui.horizontal(|ui| {
-                                        ui.label("Shortcut:");
-                                        let mut shortcut = action.shortcut.clone().unwrap_or_default();
-                                        if ui.text_edit_singleline(&mut shortcut).changed() {
-                                            if shortcut.is_empty() {
-                                                action.shortcut = None;
-                                            } else {
-                                                action.shortcut = Some(shortcut);
-                                            }
-                                        }
-                                    });
                                 });
                         }
+
+                        if let Some(msg) = notify_msg {
+                            self.notify(msg);
+                        }
+
+                        if let Some(idx) = action_to_remove {
+                            self.actions.remove(idx);
+                        }
+
                         ui.add_space(10.0);
-                        if ui.button("+ Add Action").clicked() {
+                        if ui.button("➕ Ajouter une Action").clicked() {
                             self.actions.push(crate::core::action::ActionDefinition::new(
-                                &format!("new_action_{}", self.actions.len()),
-                                "New Action",
+                                &format!("new_action_{}", self.actions.len() + 1),
+                                "Nouvelle Action",
                             ));
                         }
                     });
                 }
                 ConfigTab::Sequences => {
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        ui.heading("Automated Sequences");
-                        for seq in self.sequences.iter_mut() {
-                            egui::CollapsingHeader::new(format!("Sequence: {}", seq.name))
+                        ui.heading("Séquences Automatisées (Macros)");
+                        let mut seq_to_remove = None;
+
+                        for (s_idx, seq) in self.sequences.iter_mut().enumerate() {
+                            egui::CollapsingHeader::new(format!("Séquence: {} ({})", seq.name, seq.shortcut.as_deref().unwrap_or("aucun raccourci")))
+                                .id_source(format!("seq_header_idx_{}", s_idx))
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        ui.checkbox(&mut seq.enabled, "Enabled");
+                                        ui.checkbox(&mut seq.enabled, "Enabled (Active)");
+                                        ui.add_space(20.0);
+                                        if ui.button("🗑 Supprimer la séquence").clicked() {
+                                            seq_to_remove = Some(s_idx);
+                                        }
                                     });
-                                    if !seq.description.is_empty() {
-                                        ui.label(egui::RichText::new(&seq.description).italics());
-                                    }
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Identifiant (Clé YAML) :");
+                                        ui.add(egui::TextEdit::singleline(&mut seq.name).desired_width(180.0));
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Raccourci Clavier (Shortcut) :");
+                                        let mut sc = seq.shortcut.clone().unwrap_or_default();
+                                        if ui.add(egui::TextEdit::singleline(&mut sc).desired_width(120.0)).changed() {
+                                            seq.shortcut = if sc.trim().is_empty() { None } else { Some(sc.trim().to_string()) };
+                                        }
+                                        ui.label("(ex: ctrl+m, ctrl+l, ctrl+g)");
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("Description :");
+                                        ui.add(egui::TextEdit::singleline(&mut seq.description).desired_width(280.0));
+                                    });
+
                                     ui.separator();
                                     
                                     let mut step_to_remove = None;
                                     let available_actions: Vec<String> = self.actions.iter().map(|a| a.name.clone()).collect();
                                     
+                                    ui.label("Étapes de la séquence (en cas de timeout, passe automatiquement à la suivante) :");
                                     for (step_idx, step) in seq.steps.iter_mut().enumerate() {
                                         ui.group(|ui| {
                                             ui.horizontal(|ui| {
-                                                ui.label(format!("Step {}: ", step_idx + 1));
-                                                egui::ComboBox::from_id_source(format!("{}_step_{}", seq.name, step_idx))
-                                                    .selected_text(&step.action)
-                                                    .width(150.0)
+                                                ui.label(format!("Étape {}: ", step_idx + 1));
+                                                let display_label = self.actions.iter()
+                                                    .find(|a| a.name.eq_ignore_ascii_case(&step.action))
+                                                    .map(|a| if !a.display_name.is_empty() { format!("{} ({})", a.display_name, a.name) } else { a.name.clone() })
+                                                    .unwrap_or_else(|| step.action.clone());
+
+                                                egui::ComboBox::from_id_source(format!("seq_step_box_{}_{}", s_idx, step_idx))
+                                                    .selected_text(display_label)
+                                                    .width(240.0)
                                                     .show_ui(ui, |ui| {
-                                                        for act_name in &available_actions {
-                                                            ui.selectable_value(&mut step.action, act_name.clone(), act_name);
+                                                        for a in &self.actions {
+                                                            let item_label = if !a.display_name.is_empty() {
+                                                                format!("{} ({})", a.display_name, a.name)
+                                                            } else {
+                                                                a.name.clone()
+                                                            };
+                                                            ui.selectable_value(&mut step.action, a.name.clone(), item_label);
                                                         }
                                                     });
                                                 ui.label("Timeout (s):");
                                                 ui.add(egui::DragValue::new(&mut step.timeout_s).speed(0.1).clamp_range(0.1..=100.0));
-                                                if ui.button("🗑").on_hover_text("Remove Step").clicked() {
+                                                if ui.button("🗑").on_hover_text("Supprimer cette étape").clicked() {
                                                     step_to_remove = Some(step_idx);
                                                 }
                                             });
@@ -361,7 +517,7 @@ impl eframe::App for Lwsc2ConfigApp {
                                     if let Some(idx) = step_to_remove {
                                         seq.steps.remove(idx);
                                     }
-                                    if ui.button("+ Add Step").clicked() {
+                                    if ui.button("➕ Ajouter une Étape").clicked() {
                                         let default_action = available_actions.first().cloned().unwrap_or_else(|| "unknown".to_string());
                                         seq.steps.push(crate::core::action::SequenceStep {
                                             action: default_action,
@@ -370,16 +526,16 @@ impl eframe::App for Lwsc2ConfigApp {
                                     }
                                     
                                     ui.separator();
-                                    ui.heading("Schedules");
+                                    ui.heading("Plannings (Schedules)");
                                     if seq.schedules.is_none() {
-                                        if ui.button("+ Add Schedules").clicked() {
+                                        if ui.button("➕ Ajouter des Plannings").clicked() {
                                             seq.schedules = Some(crate::core::action::SequenceSchedules {
                                                 every_day: None, monday: None, tuesday: None, wednesday: None,
                                                 thursday: None, friday: None, saturday: None, sunday: None,
                                             });
                                         }
                                     } else {
-                                        if ui.button("🗑 Remove All Schedules").clicked() {
+                                        if ui.button("🗑 Supprimer tous les plannings").clicked() {
                                             seq.schedules = None;
                                         } else if let Some(schedules) = &mut seq.schedules {
                                             let days = [
@@ -420,6 +576,45 @@ impl eframe::App for Lwsc2ConfigApp {
                                     }
                                 });
                         }
+
+                        if let Some(idx) = seq_to_remove {
+                            self.sequences.remove(idx);
+                        }
+
+                        ui.add_space(10.0);
+                        if ui.button("➕ Ajouter une Séquence").clicked() {
+                            self.sequences.push(crate::core::action::SequenceDefinition {
+                                name: format!("new_sequence_{}", self.sequences.len() + 1),
+                                description: "Nouvelle séquence".to_string(),
+                                enabled: true,
+                                shortcut: None,
+                                schedules: None,
+                                steps: Vec::new(),
+                            });
+                        }
+                    });
+                }
+                ConfigTab::Shortcuts => {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        ui.heading("Raccourcis Clavier Globaux (Global Hotkeys)");
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Pause / Reprise (Toggle Pause) :");
+                                ui.add(egui::TextEdit::singleline(&mut self.shortcuts.toggle_pause).desired_width(120.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Ouvrir Configuration (Open Config) :");
+                                ui.add(egui::TextEdit::singleline(&mut self.shortcuts.open_config).desired_width(120.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Détection Manuelle (Force Detect) :");
+                                ui.add(egui::TextEdit::singleline(&mut self.shortcuts.force_detect).desired_width(120.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Afficher Aide (Show Help) :");
+                                ui.add(egui::TextEdit::singleline(&mut self.shortcuts.show_help).desired_width(120.0));
+                            });
+                        });
                     });
                 }
             }
@@ -427,229 +622,124 @@ impl eframe::App for Lwsc2ConfigApp {
     }
 }
 
-fn save_config_to_yaml(manager: &ActionManager, yaml_path: &str) -> bool {
-    let content = match std::fs::read_to_string(yaml_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let mut cfg: serde_yaml::Value = match serde_yaml::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-
-    let updated_actions = manager.list_actions();
-    if let Some(map) = cfg.as_mapping_mut() {
-        if let Some(actions_seq) = map.get_mut(&serde_yaml::Value::String("actions".to_string())).and_then(|v| v.as_sequence_mut()) {
-            for action_val in actions_seq.iter_mut() {
-                if let Some(action_map) = action_val.as_mapping_mut() {
-                    let name_opt = action_map.get(&serde_yaml::Value::String("name".to_string()))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    if let Some(name) = name_opt {
-                        if let Some(act_def) = updated_actions.iter().find(|a| a.name.eq_ignore_ascii_case(&name)) {
-                            action_map.insert(
-                                serde_yaml::Value::String("display_name".to_string()),
-                                serde_yaml::Value::String(act_def.display_name.clone()),
-                            );
-                            action_map.insert(
-                                serde_yaml::Value::String("description".to_string()),
-                                serde_yaml::Value::String(act_def.description.clone()),
-                            );
-                            action_map.insert(
-                                serde_yaml::Value::String("enabled".to_string()),
-                                serde_yaml::Value::Bool(act_def.enabled),
-                            );
-                            action_map.insert(
-                                serde_yaml::Value::String("cooldown_s".to_string()),
-                                serde_yaml::Value::Number(serde_yaml::Number::from(act_def.cooldown_s as f64)),
-                            );
-                            action_map.insert(
-                                serde_yaml::Value::String("priority".to_string()),
-                                serde_yaml::Value::Number(serde_yaml::Number::from(act_def.priority)),
-                            );
-                            action_map.insert(
-                                serde_yaml::Value::String("min_confidence".to_string()),
-                                serde_yaml::Value::Number(serde_yaml::Number::from(act_def.min_confidence as f64)),
-                            );
-                            action_map.insert(
-                                serde_yaml::Value::String("action_type".to_string()),
-                                serde_yaml::Value::String(act_def.action_type.as_str().to_string()),
-                            );
-                            if let Some((sx, sy)) = act_def.drag_start {
-                                action_map.insert(
-                                    serde_yaml::Value::String("drag_start".to_string()),
-                                    serde_yaml::Value::Sequence(vec![
-                                        serde_yaml::Value::Number(serde_yaml::Number::from(sx as f64)),
-                                        serde_yaml::Value::Number(serde_yaml::Number::from(sy as f64)),
-                                    ]),
-                                );
-                            } else {
-                                action_map.remove(&serde_yaml::Value::String("drag_start".to_string()));
-                            }
-                            if let Some((ex, ey)) = act_def.drag_end {
-                                action_map.insert(
-                                    serde_yaml::Value::String("drag_end".to_string()),
-                                    serde_yaml::Value::Sequence(vec![
-                                        serde_yaml::Value::Number(serde_yaml::Number::from(ex as f64)),
-                                        serde_yaml::Value::Number(serde_yaml::Number::from(ey as f64)),
-                                    ]),
-                                );
-                            } else {
-                                action_map.remove(&serde_yaml::Value::String("drag_end".to_string()));
-                            }
-                            action_map.insert(
-                                serde_yaml::Value::String("drag_duration_ms".to_string()),
-                                serde_yaml::Value::Number(serde_yaml::Number::from(act_def.drag_duration_ms)),
-                            );
-                            if let Some(t) = &act_def.template {
-                                action_map.insert(
-                                    serde_yaml::Value::String("template".to_string()),
-                                    serde_yaml::Value::String(t.clone()),
-                                );
-                            }
-                            action_map.insert(
-                                serde_yaml::Value::String("save_cursor".to_string()),
-                                serde_yaml::Value::Bool(act_def.save_cursor),
-                            );
-                            if let Some(shortcut) = &act_def.shortcut {
-                                action_map.insert(
-                                    serde_yaml::Value::String("shortcut".to_string()),
-                                    serde_yaml::Value::String(shortcut.clone()),
-                                );
-                            } else {
-                                action_map.remove(&serde_yaml::Value::String("shortcut".to_string()));
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // Append new actions that are in updated_actions but not in YAML
-            let existing_names: Vec<String> = actions_seq.iter().filter_map(|val| {
-                val.as_mapping().and_then(|m| m.get(&serde_yaml::Value::String("name".to_string())))
-                   .and_then(|v| v.as_str()).map(|s| s.to_lowercase())
-            }).collect();
-            
-            for act_def in &updated_actions {
-                if !existing_names.contains(&act_def.name.to_lowercase()) {
-                    let mut new_map = serde_yaml::Mapping::new();
-                    new_map.insert(serde_yaml::Value::String("name".to_string()), serde_yaml::Value::String(act_def.name.clone()));
-                    new_map.insert(serde_yaml::Value::String("display_name".to_string()), serde_yaml::Value::String(act_def.display_name.clone()));
-                    new_map.insert(serde_yaml::Value::String("description".to_string()), serde_yaml::Value::String(act_def.description.clone()));
-                    new_map.insert(serde_yaml::Value::String("enabled".to_string()), serde_yaml::Value::Bool(act_def.enabled));
-                    new_map.insert(serde_yaml::Value::String("cooldown_s".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(act_def.cooldown_s as f64)));
-                    new_map.insert(serde_yaml::Value::String("priority".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(act_def.priority)));
-                    new_map.insert(serde_yaml::Value::String("min_confidence".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(act_def.min_confidence as f64)));
-                    new_map.insert(serde_yaml::Value::String("save_cursor".to_string()), serde_yaml::Value::Bool(act_def.save_cursor));
-                    new_map.insert(serde_yaml::Value::String("action_type".to_string()), serde_yaml::Value::String(act_def.action_type.as_str().to_string()));
-                    if let Some((sx, sy)) = act_def.drag_start {
-                        new_map.insert(serde_yaml::Value::String("drag_start".to_string()), serde_yaml::Value::Sequence(vec![
-                            serde_yaml::Value::Number(serde_yaml::Number::from(sx as f64)),
-                            serde_yaml::Value::Number(serde_yaml::Number::from(sy as f64)),
-                        ]));
-                    }
-                    if let Some((ex, ey)) = act_def.drag_end {
-                        new_map.insert(serde_yaml::Value::String("drag_end".to_string()), serde_yaml::Value::Sequence(vec![
-                            serde_yaml::Value::Number(serde_yaml::Number::from(ex as f64)),
-                            serde_yaml::Value::Number(serde_yaml::Number::from(ey as f64)),
-                        ]));
-                    }
-                    new_map.insert(serde_yaml::Value::String("drag_duration_ms".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(act_def.drag_duration_ms)));
-                    if let Some(t) = &act_def.template {
-                        new_map.insert(serde_yaml::Value::String("template".to_string()), serde_yaml::Value::String(t.clone()));
-                    }
-                    if let Some(shortcut) = &act_def.shortcut {
-                        new_map.insert(serde_yaml::Value::String("shortcut".to_string()), serde_yaml::Value::String(shortcut.clone()));
-                    }
-                    actions_seq.push(serde_yaml::Value::Mapping(new_map));
-                }
-            }
+fn save_all_configs(
+    actions: &[crate::core::action::ActionDefinition],
+    sequences: &[crate::core::action::SequenceDefinition],
+    shortcuts: &ShortcutsConfig,
+) -> bool {
+    // 1. Save actions
+    let mut actions_map = std::collections::BTreeMap::new();
+    for a in actions {
+        let mut entry = serde_yaml::Mapping::new();
+        if !a.display_name.is_empty() && a.display_name != a.name {
+            entry.insert(serde_yaml::Value::String("display_name".to_string()), serde_yaml::Value::String(a.display_name.clone()));
         }
-        
-        let updated_sequences = manager.list_sequences();
-        if let Some(sequences_seq) = map.get_mut(&serde_yaml::Value::String("sequences".to_string())).and_then(|v| v.as_sequence_mut()) {
-            for seq_val in sequences_seq.iter_mut() {
-                if let Some(seq_map) = seq_val.as_mapping_mut() {
-                    let name_opt = seq_map.get(&serde_yaml::Value::String("name".to_string()))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-                    if let Some(name) = name_opt {
-                        if let Some(seq_def) = updated_sequences.iter().find(|s| s.name.eq_ignore_ascii_case(&name)) {
-                            seq_map.insert(
-                                serde_yaml::Value::String("enabled".to_string()),
-                                serde_yaml::Value::Bool(seq_def.enabled),
-                            );
-                            
-                            // Rebuild steps
-                            let mut new_steps_seq = serde_yaml::Sequence::new();
-                            for new_step in &seq_def.steps {
-                                let mut step_map = serde_yaml::Mapping::new();
-                                step_map.insert(
-                                    serde_yaml::Value::String("action".to_string()),
-                                    serde_yaml::Value::String(new_step.action.clone()),
-                                );
-                                step_map.insert(
-                                    serde_yaml::Value::String("timeout_s".to_string()),
-                                    serde_yaml::Value::Number(serde_yaml::Number::from(new_step.timeout_s as f64)),
-                                );
-                                new_steps_seq.push(serde_yaml::Value::Mapping(step_map));
-                            }
-                            seq_map.insert(
-                                serde_yaml::Value::String("steps".to_string()),
-                                serde_yaml::Value::Sequence(new_steps_seq)
-                            );
-                            
-                            // Rebuild schedules
-                            if let Some(schedules) = &seq_def.schedules {
-                                let mut sched_map = serde_yaml::Mapping::new();
-                                
-                                let days = [
-                                    ("every_day", &schedules.every_day),
-                                    ("monday", &schedules.monday),
-                                    ("tuesday", &schedules.tuesday),
-                                    ("wednesday", &schedules.wednesday),
-                                    ("thursday", &schedules.thursday),
-                                    ("friday", &schedules.friday),
-                                    ("saturday", &schedules.saturday),
-                                    ("sunday", &schedules.sunday),
-                                ];
-                                
-                                for (day_name, day_opt) in days.iter() {
-                                    if let Some(day_vec) = day_opt {
-                                        if !day_vec.is_empty() {
-                                            let mut day_seq = serde_yaml::Sequence::new();
-                                            for time_str in day_vec.iter() {
-                                                day_seq.push(serde_yaml::Value::String(time_str.clone()));
-                                            }
-                                            sched_map.insert(
-                                                serde_yaml::Value::String(day_name.to_string()),
-                                                serde_yaml::Value::Sequence(day_seq)
-                                            );
-                                        }
-                                    }
-                                }
-                                
-                                if !sched_map.is_empty() {
-                                    seq_map.insert(
-                                        serde_yaml::Value::String("schedules".to_string()),
-                                        serde_yaml::Value::Mapping(sched_map)
-                                    );
-                                } else {
-                                    seq_map.remove(&serde_yaml::Value::String("schedules".to_string()));
-                                }
-                            } else {
-                                seq_map.remove(&serde_yaml::Value::String("schedules".to_string()));
-                            }
-                        }
-                    }
-                }
-            }
+        if !a.description.is_empty() {
+            entry.insert(serde_yaml::Value::String("description".to_string()), serde_yaml::Value::String(a.description.clone()));
         }
-
-        if let Ok(updated_str) = serde_yaml::to_string(&cfg) {
-            return std::fs::write(yaml_path, updated_str).is_ok();
+        if !a.enabled {
+            entry.insert(serde_yaml::Value::String("enabled".to_string()), serde_yaml::Value::Bool(false));
         }
+        if let Some(ref btn) = a.button {
+            entry.insert(serde_yaml::Value::String("button".to_string()), serde_yaml::Value::String(btn.clone()));
+        }
+        if let Some(st) = a.state {
+            entry.insert(serde_yaml::Value::String("state".to_string()), serde_yaml::Value::String(st.name().to_string()));
+        }
+        if !a.parent_states.is_empty() {
+            let p_seq = a.parent_states.iter().map(|s| serde_yaml::Value::String(s.name().to_string())).collect();
+            entry.insert(serde_yaml::Value::String("parent_states".to_string()), serde_yaml::Value::Sequence(p_seq));
+        }
+        if a.action_type != crate::core::action::ActionType::ClickTemplate {
+            entry.insert(serde_yaml::Value::String("action_type".to_string()), serde_yaml::Value::String(a.action_type.as_str().to_string()));
+        }
+        if let Some(ref tmpl) = a.template {
+            entry.insert(serde_yaml::Value::String("template".to_string()), serde_yaml::Value::String(tmpl.clone()));
+        }
+        if let Some(ref ctmpl) = a.click_template {
+            entry.insert(serde_yaml::Value::String("click_template".to_string()), serde_yaml::Value::String(ctmpl.clone()));
+        }
+        if (a.cooldown_s - 1.0).abs() > f32::EPSILON {
+            entry.insert(serde_yaml::Value::String("cooldown_s".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(a.cooldown_s as f64)));
+        }
+        if a.priority != 10 {
+            entry.insert(serde_yaml::Value::String("priority".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(a.priority)));
+        }
+        if let Some(ref sc) = a.shortcut {
+            entry.insert(serde_yaml::Value::String("shortcut".to_string()), serde_yaml::Value::String(sc.clone()));
+        }
+        if let Some(ref scr) = a.script {
+            entry.insert(serde_yaml::Value::String("script".to_string()), serde_yaml::Value::String(scr.clone()));
+        }
+        if !a.args.is_empty() {
+            let args_seq = a.args.iter().map(|arg| serde_yaml::Value::String(arg.clone())).collect();
+            entry.insert(serde_yaml::Value::String("args".to_string()), serde_yaml::Value::Sequence(args_seq));
+        }
+        actions_map.insert(a.name.clone(), serde_yaml::Value::Mapping(entry));
     }
-    false
+
+    if let Ok(act_str) = serde_yaml::to_string(&actions_map) {
+        let _ = std::fs::write("config/actions.yaml", act_str);
+    }
+
+    // 2. Save sequences
+    let mut seqs_map = std::collections::BTreeMap::new();
+    for s in sequences {
+        let mut entry = serde_yaml::Mapping::new();
+        if !s.description.is_empty() {
+            entry.insert(serde_yaml::Value::String("description".to_string()), serde_yaml::Value::String(s.description.clone()));
+        }
+        if !s.enabled {
+            entry.insert(serde_yaml::Value::String("enabled".to_string()), serde_yaml::Value::Bool(false));
+        }
+        if let Some(ref sc) = s.shortcut {
+            entry.insert(serde_yaml::Value::String("shortcut".to_string()), serde_yaml::Value::String(sc.clone()));
+        }
+        let steps_seq: Vec<serde_yaml::Value> = s.steps.iter().map(|step| {
+            let mut st_map = serde_yaml::Mapping::new();
+            st_map.insert(serde_yaml::Value::String("action".to_string()), serde_yaml::Value::String(step.action.clone()));
+            if (step.timeout_s - 5.0).abs() > f32::EPSILON {
+                st_map.insert(serde_yaml::Value::String("timeout_s".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(step.timeout_s as f64)));
+            }
+            serde_yaml::Value::Mapping(st_map)
+        }).collect();
+        entry.insert(serde_yaml::Value::String("steps".to_string()), serde_yaml::Value::Sequence(steps_seq));
+
+        if let Some(ref scheds) = s.schedules {
+            let mut sched_map = serde_yaml::Mapping::new();
+            let days = [
+                ("every_day", &scheds.every_day),
+                ("monday", &scheds.monday),
+                ("tuesday", &scheds.tuesday),
+                ("wednesday", &scheds.wednesday),
+                ("thursday", &scheds.thursday),
+                ("friday", &scheds.friday),
+                ("saturday", &scheds.saturday),
+                ("sunday", &scheds.sunday),
+            ];
+            for (day_name, day_opt) in days {
+                if let Some(day_vec) = day_opt {
+                    if !day_vec.is_empty() {
+                        let seq = day_vec.iter().map(|t| serde_yaml::Value::String(t.clone())).collect();
+                        sched_map.insert(serde_yaml::Value::String(day_name.to_string()), serde_yaml::Value::Sequence(seq));
+                    }
+                }
+            }
+            if !sched_map.is_empty() {
+                entry.insert(serde_yaml::Value::String("schedules".to_string()), serde_yaml::Value::Mapping(sched_map));
+            }
+        }
+        seqs_map.insert(s.name.clone(), serde_yaml::Value::Mapping(entry));
+    }
+
+    if let Ok(seq_str) = serde_yaml::to_string(&seqs_map) {
+        let _ = std::fs::write("config/sequences.yaml", seq_str);
+    }
+
+    // 3. Save shortcuts
+    if let Ok(short_str) = serde_yaml::to_string(shortcuts) {
+        let _ = std::fs::write("config/shortcuts.yaml", short_str);
+    }
+
+    true
 }

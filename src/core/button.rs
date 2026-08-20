@@ -1,11 +1,39 @@
 //! Button definitions and detection for UI elements attached to GameStates.
 
+use std::collections::BTreeMap;
+use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::core::state::{GameState, NormalizedROI};
 
 fn default_min_confidence() -> f32 {
     0.85
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ButtonDefinitionEntry {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default, deserialize_with = "crate::core::state::deserialize_gamestates_or_single")]
+    pub parent_states: Vec<GameState>,
+    #[serde(default)]
+    pub target_state: Option<GameState>,
+    #[serde(default)]
+    pub template: Option<String>,
+    #[serde(default)]
+    pub click_template: Option<String>,
+    #[serde(default)]
+    pub roi: Option<NormalizedROI>,
+    #[serde(default = "default_min_confidence")]
+    pub min_confidence: f32,
+    #[serde(default)]
+    pub save_cursor: bool,
+    #[serde(default)]
+    pub shortcut: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// A button or interactive UI element that can appear on one or more GameStates.
@@ -19,7 +47,7 @@ pub struct ButtonDefinition {
     pub display_name: String,
 
     /// The game states on which this button can appear
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::core::state::deserialize_gamestates_or_single")]
     pub parent_states: Vec<GameState>,
 
     /// The destination game state if clicking this button opens another screen/menu
@@ -27,6 +55,7 @@ pub struct ButtonDefinition {
     pub target_state: Option<GameState>,
 
     /// Path to template image under roi/
+    #[serde(default)]
     pub template: String,
 
     /// Optional specific template name/path to click when multiple templates exist in expected/
@@ -35,6 +64,7 @@ pub struct ButtonDefinition {
     pub click_template: Option<String>,
 
     /// Normalized Region Of Interest (0.0 .. 1.0)
+    #[serde(default)]
     pub roi: Option<NormalizedROI>,
 
     /// Minimum matching confidence (0.0 .. 1.0)
@@ -50,6 +80,7 @@ pub struct ButtonDefinition {
     pub shortcut: Option<String>,
 
     /// Optional description
+    #[serde(default)]
     pub description: Option<String>,
 }
 
@@ -71,9 +102,49 @@ impl ButtonDefinition {
                 }
             }
             results.sort();
-            results
-        } else {
+            if !results.is_empty() {
+                return results;
+            }
+        }
+
+        // Check fallback candidate paths (expected/ directory or direct file)
+        let candidate_paths = [
+            format!("{}/expected", self.template.trim_end_matches('/')),
+            format!("{}.png", self.template.trim_end_matches('/')),
+            format!("roi/{}/expected", self.id),
+            format!("roi/{}/expected.png", self.id),
+            format!("roi/{}/expected", self.id.strip_suffix("_BUTTON").unwrap_or(&self.id)),
+            format!("roi/{}/expected.png", self.id.strip_suffix("_BUTTON").unwrap_or(&self.id)),
+        ];
+
+        for cand in candidate_paths {
+            let cp = std::path::Path::new(&cand);
+            if cp.is_dir() {
+                let mut results = Vec::new();
+                if let Ok(entries) = std::fs::read_dir(cp) {
+                    for entry in entries.flatten() {
+                        let ep = entry.path();
+                        if let Some(ext) = ep.extension().and_then(|e| e.to_str()) {
+                            let lower = ext.to_lowercase();
+                            if lower == "png" || lower == "jpg" || lower == "jpeg" {
+                                results.push(ep.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+                results.sort();
+                if !results.is_empty() {
+                    return results;
+                }
+            } else if cp.is_file() {
+                return vec![cand];
+            }
+        }
+
+        if !self.template.is_empty() {
             vec![self.template.clone()]
+        } else {
+            vec![format!("roi/{}/expected/", self.id)]
         }
     }
 }
@@ -139,15 +210,59 @@ pub struct ButtonDetection {
     pub save_cursor: bool,
 }
 
-/// Loads all button definitions from YAML configuration.
-pub fn load_buttons_from_config(path: &str) -> Result<Vec<ButtonDefinition>, Box<dyn std::error::Error>> {
-    #[derive(Deserialize)]
-    struct ConfigWrapper {
-        #[serde(default)]
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ButtonsContent {
+    WrapperMap {
+        buttons: BTreeMap<String, ButtonDefinitionEntry>,
+    },
+    WrapperList {
         buttons: Vec<ButtonDefinition>,
-    }
+    },
+    DirectMap(BTreeMap<String, ButtonDefinitionEntry>),
+    DirectList(Vec<ButtonDefinition>),
+}
 
-    let file = std::fs::File::open(path)?;
-    let wrapper: ConfigWrapper = serde_yaml::from_reader(file)?;
-    Ok(wrapper.buttons)
+pub fn parse_buttons_from_str(content: &str) -> Result<Vec<ButtonDefinition>, Box<dyn std::error::Error>> {
+    let content_parsed: ButtonsContent = serde_yaml::from_str(content)?;
+    let mut buttons = Vec::new();
+    match content_parsed {
+        ButtonsContent::WrapperList { buttons: list } | ButtonsContent::DirectList(list) => {
+            buttons = list;
+        }
+        ButtonsContent::WrapperMap { buttons: map } | ButtonsContent::DirectMap(map) => {
+            for (key, entry) in map {
+                let id = entry.id.unwrap_or_else(|| key.clone());
+                let display_name = entry.display_name.unwrap_or_else(|| id.clone());
+                let template = entry.template.unwrap_or_else(|| format!("roi/{}/expected/", id));
+                buttons.push(ButtonDefinition {
+                    id,
+                    display_name,
+                    parent_states: entry.parent_states,
+                    target_state: entry.target_state,
+                    template,
+                    click_template: entry.click_template,
+                    roi: entry.roi,
+                    min_confidence: entry.min_confidence,
+                    save_cursor: entry.save_cursor,
+                    shortcut: entry.shortcut,
+                    description: entry.description,
+                });
+            }
+        }
+    }
+    Ok(buttons)
+}
+
+/// Loads all button definitions from YAML configuration (checks buttons.yaml first, then fallback to states.yaml).
+pub fn load_buttons_from_config(path: &str) -> Result<Vec<ButtonDefinition>, Box<dyn std::error::Error>> {
+    let p = Path::new(path);
+    let target_path = if p.ends_with("states.yaml") && Path::new("config/buttons.yaml").exists() {
+        Path::new("config/buttons.yaml")
+    } else {
+        p
+    };
+
+    let content = std::fs::read_to_string(target_path)?;
+    parse_buttons_from_str(&content)
 }

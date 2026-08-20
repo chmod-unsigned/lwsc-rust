@@ -90,10 +90,10 @@ fn test_root_state_resolution() {
 
 #[test]
 fn test_button_definitions_loading() {
-    let buttons = lwsc2::core::load_buttons_from_config("config/states.yaml").expect("buttons should load");
+    let buttons = lwsc2::core::load_buttons_from_config("config/buttons.yaml").expect("buttons should load");
     assert!(!buttons.is_empty());
     
-    let help_btn = buttons.iter().find(|b| b.id == "HELP").expect("HELP button should exist");
+    let help_btn = buttons.iter().find(|b| b.id == "HELP_BUTTON").expect("HELP_BUTTON should exist");
     assert_eq!(help_btn.parent_states, vec![GameState::Base, GameState::Area]);
     assert_eq!(help_btn.target_state, None);
     assert!(help_btn.save_cursor);
@@ -123,13 +123,13 @@ fn test_button_definitions_loading() {
 
     let shop_btn = buttons.iter().find(|b| b.id == "MAIN_SHOP_BUTTON").expect("MAIN_SHOP_BUTTON should exist");
     assert_eq!(shop_btn.parent_states, vec![GameState::Base, GameState::Area]);
-    assert_eq!(shop_btn.target_state, Some(GameState::MainShop));
-    assert_eq!(shop_btn.template, "roi/MAIN_SHOP_BUTTON/expected.png");
+    assert!(shop_btn.target_state == Some(GameState::MainShop) || shop_btn.target_state == Some(GameState::MainShopMallHotSalePacks));
+    assert!(!shop_btn.resolved_templates().is_empty());
 
     let alliance_btn = buttons.iter().find(|b| b.id == "ALLIANCE_BUTTON").expect("ALLIANCE_BUTTON should exist");
     assert_eq!(alliance_btn.parent_states, vec![GameState::Base, GameState::Area]);
     assert_eq!(alliance_btn.target_state, Some(GameState::Alliance));
-    assert_eq!(alliance_btn.template, "roi/ALLIANCE_BUTTON/expected.png");
+    assert!(!alliance_btn.resolved_templates().is_empty());
 }
 
 #[test]

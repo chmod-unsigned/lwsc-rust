@@ -157,6 +157,14 @@ pub struct ActionDefinition {
     #[serde(default)]
     pub shortcut: Option<String>,
 
+    /// Path to a Python script to execute for Custom action types
+    #[serde(default, alias = "python_script", alias = "command")]
+    pub script: Option<String>,
+
+    /// Optional extra CLI arguments to pass to the python script
+    #[serde(default, alias = "script_args")]
+    pub args: Vec<String>,
+
     /// Internal runtime timestamp for cooldown enforcement
     #[serde(skip)]
     pub last_executed: Option<Instant>,
@@ -186,6 +194,8 @@ impl ActionDefinition {
             priority: default_priority(),
             save_cursor: false,
             shortcut: None,
+            script: None,
+            args: Vec::new(),
             last_executed: None,
         }
     }
@@ -214,7 +224,8 @@ impl ActionDefinition {
 
     /// Resolves template file paths, expanding any directory paths into image files.
     pub fn resolved_templates(&self) -> Vec<String> {
-        if let Some(ref t) = self.template {
+        let tmpl_source = self.template.as_ref().or(self.click_template.as_ref());
+        if let Some(t) = tmpl_source {
             let p = std::path::Path::new(t);
             if p.is_dir() {
                 let mut results = Vec::new();
@@ -270,6 +281,68 @@ impl ActionDefinition {
     }
 }
 
+/// Executes a Python script asynchronously in the background.
+pub fn run_python_script(
+    script: &str,
+    extra_args: &[String],
+    window_id: Option<u32>,
+    current_state: Option<&str>,
+    screenshot_path: Option<&str>,
+) {
+    let python_bin = if Path::new("scripts/venv/bin/python3").exists() {
+        "scripts/venv/bin/python3"
+    } else if Path::new("venv/bin/python3").exists() {
+        "venv/bin/python3"
+    } else {
+        "python3"
+    };
+
+    let script_path = if Path::new(script).exists() {
+        script.to_string()
+    } else if Path::new(&format!("scripts/{}", script)).exists() {
+        format!("scripts/{}", script)
+    } else {
+        script.to_string()
+    };
+
+    let mut cmd = std::process::Command::new(python_bin);
+    cmd.arg(&script_path);
+
+    if let Some(wid) = window_id {
+        cmd.arg("--window-id").arg(wid.to_string());
+    }
+    if let Some(st) = current_state {
+        cmd.arg("--state").arg(st);
+    }
+    if let Some(sc) = screenshot_path {
+        cmd.arg("--screenshot").arg(sc);
+    }
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+
+    println!("[Custom Action] Launching Python script: {} {} {:?}", python_bin, script_path, extra_args);
+
+    let script_display = script_path.clone();
+    std::thread::spawn(move || {
+        match cmd.output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stdout.is_empty() {
+                    println!("[Python Script '{}' stdout]:\n{}", script_display, stdout.trim());
+                }
+                if !output.status.success() || !stderr.is_empty() {
+                    eprintln!("[Python Script '{}' stderr] (code: {:?}):\n{}", script_display, output.status.code(), stderr.trim());
+                }
+            }
+            Err(e) => {
+                eprintln!("[Custom Action] Failed to execute Python script '{}': {}", script_display, e);
+            }
+        }
+    });
+}
+
 #[derive(Debug, Clone)]
 pub struct ActionExecutionResult {
     pub action_name: String,
@@ -279,6 +352,8 @@ pub struct ActionExecutionResult {
     pub drag_coords: Option<((i32, i32), (i32, i32))>,
     pub drag_duration_ms: u64,
     pub sweep_templates: Vec<String>,
+    pub script: Option<String>,
+    pub script_args: Vec<String>,
     pub save_cursor: bool,
 }
 
@@ -312,6 +387,168 @@ pub struct SequenceSchedules {
     pub saturday: Option<Vec<String>>,
     #[serde(default)]
     pub sunday: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionDefinitionEntry {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default = "default_true", alias = "active")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub button: Option<String>,
+    #[serde(default)]
+    pub state: Option<GameState>,
+    #[serde(default, alias = "parent_state", deserialize_with = "crate::core::state::deserialize_gamestates_or_single")]
+    pub parent_states: Vec<GameState>,
+    #[serde(default = "default_action_type")]
+    pub action_type: ActionType,
+    #[serde(default)]
+    pub template: Option<String>,
+    #[serde(default)]
+    pub click_template: Option<String>,
+    #[serde(default)]
+    pub roi: Option<NormalizedROI>,
+    #[serde(default)]
+    pub coords: Option<(f32, f32)>,
+    #[serde(default)]
+    pub drag_start: Option<(f32, f32)>,
+    #[serde(default)]
+    pub drag_end: Option<(f32, f32)>,
+    #[serde(default = "default_drag_duration")]
+    pub drag_duration_ms: u64,
+    #[serde(default)]
+    pub key_name: Option<String>,
+    #[serde(default)]
+    pub min_confidence: Option<f32>,
+    #[serde(default = "default_cooldown")]
+    pub cooldown_s: f32,
+    #[serde(default = "default_priority")]
+    pub priority: u32,
+    #[serde(default)]
+    pub save_cursor: bool,
+    #[serde(default)]
+    pub shortcut: Option<String>,
+    #[serde(default, alias = "python_script", alias = "command")]
+    pub script: Option<String>,
+    #[serde(default, alias = "script_args")]
+    pub args: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ActionsContent {
+    WrapperMap {
+        actions: std::collections::BTreeMap<String, ActionDefinitionEntry>,
+    },
+    WrapperList {
+        actions: Vec<ActionDefinition>,
+    },
+    DirectMap(std::collections::BTreeMap<String, ActionDefinitionEntry>),
+    DirectList(Vec<ActionDefinition>),
+}
+
+pub fn parse_actions_from_str(content: &str) -> Result<Vec<ActionDefinition>, Box<dyn std::error::Error>> {
+    let content_parsed: ActionsContent = serde_yaml::from_str(content)?;
+    let mut actions = Vec::new();
+    match content_parsed {
+        ActionsContent::WrapperList { actions: list } | ActionsContent::DirectList(list) => {
+            actions = list;
+        }
+        ActionsContent::WrapperMap { actions: map } | ActionsContent::DirectMap(map) => {
+            for (key, entry) in map {
+                let name = entry.name.unwrap_or_else(|| key.clone());
+                let display_name = entry.display_name.unwrap_or_else(|| name.clone());
+                let description = entry.description.unwrap_or_default();
+                let min_confidence = entry.min_confidence.unwrap_or_else(default_min_confidence);
+                actions.push(ActionDefinition {
+                    name,
+                    display_name,
+                    description,
+                    enabled: entry.enabled,
+                    button: entry.button,
+                    state: entry.state,
+                    parent_states: entry.parent_states,
+                    action_type: entry.action_type,
+                    template: entry.template,
+                    click_template: entry.click_template,
+                    roi: entry.roi,
+                    coords: entry.coords,
+                    drag_start: entry.drag_start,
+                    drag_end: entry.drag_end,
+                    drag_duration_ms: entry.drag_duration_ms,
+                    key_name: entry.key_name,
+                    min_confidence,
+                    cooldown_s: entry.cooldown_s,
+                    priority: entry.priority,
+                    save_cursor: entry.save_cursor,
+                    shortcut: entry.shortcut,
+                    script: entry.script,
+                    args: entry.args,
+                    last_executed: None,
+                });
+            }
+        }
+    }
+    Ok(actions)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SequenceDefinitionEntry {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub shortcut: Option<String>,
+    #[serde(default)]
+    pub schedules: Option<SequenceSchedules>,
+    #[serde(default)]
+    pub steps: Vec<SequenceStep>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SequencesContent {
+    WrapperMap {
+        sequences: std::collections::BTreeMap<String, SequenceDefinitionEntry>,
+    },
+    WrapperList {
+        sequences: Vec<SequenceDefinition>,
+    },
+    DirectMap(std::collections::BTreeMap<String, SequenceDefinitionEntry>),
+    DirectList(Vec<SequenceDefinition>),
+}
+
+pub fn parse_sequences_from_str(content: &str) -> Result<Vec<SequenceDefinition>, Box<dyn std::error::Error>> {
+    let content_parsed: SequencesContent = serde_yaml::from_str(content)?;
+    let mut sequences = Vec::new();
+    match content_parsed {
+        SequencesContent::WrapperList { sequences: list } | SequencesContent::DirectList(list) => {
+            sequences = list;
+        }
+        SequencesContent::WrapperMap { sequences: map } | SequencesContent::DirectMap(map) => {
+            for (key, entry) in map {
+                let name = entry.name.unwrap_or_else(|| key.clone());
+                let description = entry.description.unwrap_or_default();
+                sequences.push(SequenceDefinition {
+                    name,
+                    description,
+                    enabled: entry.enabled,
+                    shortcut: entry.shortcut,
+                    schedules: entry.schedules,
+                    steps: entry.steps,
+                });
+            }
+        }
+    }
+    Ok(sequences)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +603,10 @@ impl ActionManager {
             sequence_queue: RwLock::new(VecDeque::new()),
             sequence_last_run: RwLock::new(HashMap::new()),
         }
+    }
+
+    pub fn from_actions(actions: Vec<ActionDefinition>) -> Self {
+        Self::new(actions, Vec::new())
     }
 
     pub fn new_with_buttons(mut actions: Vec<ActionDefinition>, buttons: &[crate::core::button::ButtonDefinition], sequences: Vec<SequenceDefinition>) -> Self {
@@ -512,9 +753,11 @@ impl ActionManager {
                     executed: false,
                     reason: format!("Current state {:?} does not match required state {:?}", current_state, req_state),
                     click_coords: None,
-                        drag_coords: None,
-                        drag_duration_ms: action.drag_duration_ms,
-                        sweep_templates: Vec::new(),
+                    drag_coords: None,
+                    drag_duration_ms: action.drag_duration_ms,
+                    sweep_templates: Vec::new(),
+                    script: None,
+                    script_args: Vec::new(),
                     save_cursor: action.save_cursor,
                 });
             }
@@ -525,9 +768,11 @@ impl ActionManager {
                 executed: false,
                 reason: format!("Current state {:?} is not in parent_states {:?}", current_state, action.parent_states),
                 click_coords: None,
-                        drag_coords: None,
-                        drag_duration_ms: action.drag_duration_ms,
-                        sweep_templates: Vec::new(),
+                drag_coords: None,
+                drag_duration_ms: action.drag_duration_ms,
+                sweep_templates: Vec::new(),
+                script: None,
+                script_args: Vec::new(),
                 save_cursor: action.save_cursor,
             });
         }
@@ -539,9 +784,11 @@ impl ActionManager {
                 executed: false,
                 reason: format!("Action is on cooldown ({:.1}s)", action.cooldown_s),
                 click_coords: None,
-                        drag_coords: None,
-                        drag_duration_ms: action.drag_duration_ms,
-                        sweep_templates: Vec::new(),
+                drag_coords: None,
+                drag_duration_ms: action.drag_duration_ms,
+                sweep_templates: Vec::new(),
+                script: None,
+                script_args: Vec::new(),
                 save_cursor: action.save_cursor,
             });
         }
@@ -560,6 +807,8 @@ impl ActionManager {
                         drag_coords: None,
                         drag_duration_ms: action.drag_duration_ms,
                         sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
                         save_cursor: action.save_cursor,
                     });
                 }
@@ -607,6 +856,8 @@ impl ActionManager {
                         drag_coords: None,
                         drag_duration_ms: action.drag_duration_ms,
                         sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
                         save_cursor: action.save_cursor,
                     })
                 } else {
@@ -619,6 +870,8 @@ impl ActionManager {
                         drag_coords: None,
                         drag_duration_ms: action.drag_duration_ms,
                         sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
                         save_cursor: action.save_cursor,
                     })
                 }
@@ -633,15 +886,28 @@ impl ActionManager {
                     Some(ActionExecutionResult {
                         action_name: action.name.clone(),
                         executed: true,
-                        reason: "Clicked center of designated ROI (manual shortcut)".to_string(),
+                        reason: "Clicked center of designated ROI".to_string(),
                         click_coords: Some((center_x.round() as i32, center_y.round() as i32)),
                         drag_coords: None,
                         drag_duration_ms: action.drag_duration_ms,
                         sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
                         save_cursor: action.save_cursor,
                     })
                 } else {
-                    None
+                    Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: false,
+                        reason: "Missing ROI definition for ClickRoi action".to_string(),
+                        click_coords: None,
+                        drag_coords: None,
+                        drag_duration_ms: action.drag_duration_ms,
+                        sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
+                        save_cursor: action.save_cursor,
+                    })
                 }
             }
             ActionType::ClickCoords => {
@@ -652,29 +918,59 @@ impl ActionManager {
                     Some(ActionExecutionResult {
                         action_name: action.name.clone(),
                         executed: true,
-                        reason: "Clicked designated normalized coordinates (manual shortcut)".to_string(),
+                        reason: "Clicked designated normalized coordinates".to_string(),
                         click_coords: Some((cx.round() as i32, cy.round() as i32)),
                         drag_coords: None,
                         drag_duration_ms: action.drag_duration_ms,
                         sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
                         save_cursor: action.save_cursor,
                     })
                 } else {
-                    None
+                    Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: false,
+                        reason: "Missing coordinates (coords: [X, Y]) for ClickCoords action".to_string(),
+                        click_coords: None,
+                        drag_coords: None,
+                        drag_duration_ms: action.drag_duration_ms,
+                        sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
+                        save_cursor: action.save_cursor,
+                    })
                 }
             }
             ActionType::KeyPress => {
-                action.mark_executed();
-                Some(ActionExecutionResult {
-                    action_name: action.name.clone(),
-                    executed: true,
-                    reason: format!("Key press action: {:?}", action.key_name),
-                    click_coords: None,
-                    drag_coords: None,
-                    drag_duration_ms: action.drag_duration_ms,
-                    sweep_templates: Vec::new(),
-                    save_cursor: action.save_cursor,
-                })
+                if action.key_name.is_none() {
+                    Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: false,
+                        reason: "Missing key_name for KeyPress action".to_string(),
+                        click_coords: None,
+                        drag_coords: None,
+                        drag_duration_ms: action.drag_duration_ms,
+                        sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
+                        save_cursor: action.save_cursor,
+                    })
+                } else {
+                    action.mark_executed();
+                    Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: true,
+                        reason: format!("Key press action: {:?}", action.key_name),
+                        click_coords: None,
+                        drag_coords: None,
+                        drag_duration_ms: action.drag_duration_ms,
+                        sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
+                        save_cursor: action.save_cursor,
+                    })
+                }
             }
             ActionType::DragDrop => {
                 if let (Some(start), Some(end)) = (action.drag_start, action.drag_end) {
@@ -691,10 +987,23 @@ impl ActionManager {
                         drag_coords: Some(((sx, sy), (ex, ey))),
                         drag_duration_ms: action.drag_duration_ms,
                         sweep_templates: action.resolved_templates(),
+                        script: None,
+                        script_args: Vec::new(),
                         save_cursor: action.save_cursor,
                     })
                 } else {
-                    None
+                    Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: false,
+                        reason: "Missing drag_start or drag_end coordinates for DragDrop action".to_string(),
+                        click_coords: None,
+                        drag_coords: None,
+                        drag_duration_ms: action.drag_duration_ms,
+                        sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
+                        save_cursor: action.save_cursor,
+                    })
                 }
             }
             ActionType::Custom => {
@@ -702,11 +1011,13 @@ impl ActionManager {
                 Some(ActionExecutionResult {
                     action_name: action.name.clone(),
                     executed: true,
-                    reason: "Custom action triggered (manual shortcut)".to_string(),
+                    reason: format!("Custom script action triggered: {:?}", action.script),
                     click_coords: None,
                     drag_coords: None,
                     drag_duration_ms: action.drag_duration_ms,
                     sweep_templates: Vec::new(),
+                    script: action.script.clone(),
+                    script_args: action.args.clone(),
                     save_cursor: action.save_cursor,
                 })
             }
@@ -807,9 +1118,17 @@ impl ActionManager {
         let step = &seq.steps[active_state.current_step_index];
         
         if active_state.step_start_time.elapsed() > std::time::Duration::from_secs_f32(step.timeout_s) {
-            println!("[Sequence] Step {} '{}' timed out after {:.1}s. Aborting sequence '{}'.",
+            println!("[Sequence] Step {} '{}' timed out after {:.1}s. Continuing to next step in sequence '{}'.",
                 active_state.current_step_index, step.action, step.timeout_s, seq.name);
-            *active_lock = None;
+            if active_state.current_step_index + 1 < seq.steps.len() {
+                let mut new_state = active_state.clone();
+                new_state.current_step_index += 1;
+                new_state.step_start_time = std::time::Instant::now();
+                *active_lock = Some(new_state);
+            } else {
+                println!("[Sequence] Sequence '{}' finished (last step timed out).", seq.name);
+                *active_lock = None;
+            }
             return None;
         }
 
@@ -878,6 +1197,8 @@ impl ActionManager {
                     drag_coords: None,
                     drag_duration_ms: action.drag_duration_ms,
                     sweep_templates: Vec::new(),
+                    script: None,
+                    script_args: Vec::new(),
                     save_cursor: action.save_cursor,
                 });
                 continue;
@@ -897,6 +1218,8 @@ impl ActionManager {
                             drag_coords: None,
                             drag_duration_ms: action.drag_duration_ms,
                             sweep_templates: Vec::new(),
+                            script: None,
+                            script_args: Vec::new(),
                             save_cursor: action.save_cursor,
                         });
                         continue;
@@ -945,6 +1268,8 @@ impl ActionManager {
                             drag_coords: None,
                             drag_duration_ms: action.drag_duration_ms,
                             sweep_templates: Vec::new(),
+                            script: None,
+                            script_args: Vec::new(),
                             save_cursor: action.save_cursor,
                         });
                     }
@@ -964,6 +1289,8 @@ impl ActionManager {
                             drag_coords: None,
                             drag_duration_ms: action.drag_duration_ms,
                             sweep_templates: Vec::new(),
+                            script: None,
+                            script_args: Vec::new(),
                             save_cursor: action.save_cursor,
                         });
                     }
@@ -981,6 +1308,8 @@ impl ActionManager {
                             drag_coords: None,
                             drag_duration_ms: action.drag_duration_ms,
                             sweep_templates: Vec::new(),
+                            script: None,
+                            script_args: Vec::new(),
                             save_cursor: action.save_cursor,
                         });
                     }
@@ -995,10 +1324,32 @@ impl ActionManager {
                         drag_coords: None,
                         drag_duration_ms: action.drag_duration_ms,
                         sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
                         save_cursor: action.save_cursor,
                     });
                 }
                 ActionType::DragDrop => {
+                    let templates = action.resolved_templates();
+                    if !templates.is_empty() {
+                        let mut all_matched = true;
+                        for tmpl_path in &templates {
+                            let match_res = matcher.find_match(
+                                screen,
+                                tmpl_path,
+                                action.min_confidence,
+                                roi_px,
+                            );
+                            if !match_res.matched {
+                                all_matched = false;
+                                break;
+                            }
+                        }
+                        if !all_matched {
+                            continue;
+                        }
+                    }
+
                     if let (Some(start), Some(end)) = (action.drag_start, action.drag_end) {
                         let sx = (start.0 * img_w as f32).round() as i32;
                         let sy = (start.1 * img_h as f32).round() as i32;
@@ -1013,6 +1364,8 @@ impl ActionManager {
                             drag_coords: Some(((sx, sy), (ex, ey))),
                             drag_duration_ms: action.drag_duration_ms,
                             sweep_templates: action.resolved_templates(),
+                            script: None,
+                            script_args: Vec::new(),
                             save_cursor: action.save_cursor,
                         });
                     }
@@ -1022,11 +1375,13 @@ impl ActionManager {
                     results.push(ActionExecutionResult {
                         action_name: action.name.clone(),
                         executed: true,
-                        reason: "Custom action triggered".to_string(),
+                        reason: format!("Custom script action triggered: {:?}", action.script),
                         click_coords: None,
                         drag_coords: None,
                         drag_duration_ms: action.drag_duration_ms,
                         sweep_templates: Vec::new(),
+                        script: action.script.clone(),
+                        script_args: action.args.clone(),
                         save_cursor: action.save_cursor,
                     });
                 }

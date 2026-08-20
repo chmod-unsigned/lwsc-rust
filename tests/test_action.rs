@@ -1,6 +1,6 @@
 use image::open;
 use lwsc2::core::{
-    load_actions_from_config, ActionDefinition, ActionManager, ActionType, GameState, NormalizedROI,
+    load_actions_from_config, ActionDefinition, ActionManager, ActionType, GameState, NormalizedROI, SequenceDefinition, SequenceStep,
 };
 use lwsc2::vision::matching::TemplateMatcher;
 
@@ -13,7 +13,7 @@ fn test_actions_yaml_loading() {
 
     let help_action = actions.iter().find(|a| a.name == "alliance_help").expect("alliance_help missing");
     assert!(help_action.enabled, "alliance_help should be active/enabled");
-    assert_eq!(help_action.button.as_deref(), Some("HELP"));
+    assert_eq!(help_action.button.as_deref(), Some("HELP_BUTTON"));
     assert_eq!(help_action.template.as_deref(), Some("roi/HELP/expected.png"));
     assert!(help_action.roi.is_some());
     assert!(help_action.save_cursor);
@@ -39,6 +39,28 @@ fn test_actions_yaml_loading() {
     assert_eq!(loot_claim_all_action.button.as_deref(), Some("LOOT_CLAIM_ALL_BUTTON"));
     assert_eq!(loot_claim_all_action.shortcut.as_deref(), Some("ctrl+4"));
     assert_eq!(loot_claim_all_action.parent_states, vec![GameState::Loot]);
+
+    let gold_mine_action = actions.iter().find(|a| a.name == "search_gold_mine").expect("search_gold_mine missing");
+    assert_eq!(gold_mine_action.action_type, ActionType::Custom);
+    assert_eq!(gold_mine_action.script.as_deref(), Some("scripts/search_gold_mine.py"));
+}
+
+#[test]
+fn test_sequences_yaml_loading() {
+    let sequences = lwsc2::core::load_sequences_from_config("config/states.yaml")
+        .expect("load sequences");
+    assert_eq!(sequences.len(), 3);
+    let names: Vec<String> = sequences.iter().map(|s| s.name.clone()).collect();
+    assert!(names.contains(&"morning_routine".to_string()));
+    assert!(names.contains(&"search_gold_mine".to_string()));
+    assert!(names.contains(&"sequence_loot_claim".to_string()));
+
+    let morning = sequences.iter().find(|s| s.name == "morning_routine").unwrap();
+    assert_eq!(morning.steps.len(), 4);
+    assert_eq!(morning.steps[0].action, "loot_claim");
+    assert_eq!(morning.steps[1].action, "loot_claim_all");
+    assert_eq!(morning.steps[2].action, "main_shop");
+    assert_eq!(morning.steps[3].action, "main_shop_mall_hot_sale_packs_claim");
 }
 
 #[test]
@@ -46,6 +68,7 @@ fn test_action_manager_enable_disable() {
     let actions = vec![
         ActionDefinition {
             name: "test_action_1".to_string(),
+            display_name: "Test action 1".to_string(),
             description: "Test action 1".to_string(),
             enabled: true,
             button: None,
@@ -56,16 +79,22 @@ fn test_action_manager_enable_disable() {
             click_template: None,
             roi: Some(NormalizedROI::new(0.64, 0.77, 0.86, 0.98)),
             coords: None,
+            drag_start: None,
+            drag_end: None,
+            drag_duration_ms: 1000,
             key_name: None,
             min_confidence: 0.85,
             cooldown_s: 2.0,
             priority: 1,
             save_cursor: true,
             shortcut: Some("ctrl+1".to_string()),
+            script: None,
+            args: Vec::new(),
             last_executed: None,
         },
         ActionDefinition {
             name: "test_action_2".to_string(),
+            display_name: "Test action 2".to_string(),
             description: "Test action 2".to_string(),
             enabled: false,
             button: None,
@@ -76,19 +105,24 @@ fn test_action_manager_enable_disable() {
             click_template: None,
             roi: Some(NormalizedROI::new(0.50, 0.66, 0.32, 0.54)),
             coords: None,
+            drag_start: None,
+            drag_end: None,
+            drag_duration_ms: 1000,
             key_name: None,
             min_confidence: 0.85,
             cooldown_s: 5.0,
             priority: 2,
             save_cursor: false,
             shortcut: None,
+            script: None,
+            args: Vec::new(),
             last_executed: None,
         },
     ];
 
-    let manager = ActionManager::new(actions);
+    let manager = ActionManager::from_actions(actions);
 
-    assert_eq!(manager.get_shortcuts(), vec![("test_action_1".to_string(), "ctrl+1".to_string())]);
+    assert_eq!(manager.get_shortcuts(), vec![("action:test_action_1".to_string(), "ctrl+1".to_string())]);
 
     assert!(manager.is_action_enabled("test_action_1"));
     assert!(!manager.is_action_enabled("test_action_2"));
@@ -108,7 +142,7 @@ fn test_action_manager_enable_disable() {
 fn test_action_evaluation_on_real_screen() {
     let actions = load_actions_from_config("config/states.yaml")
         .expect("failed to load actions from config/states.yaml");
-    let manager = ActionManager::new(actions);
+    let manager = ActionManager::from_actions(actions);
 
     let mut matcher = TemplateMatcher::new(".");
     let help_screen_path = "roi/HELP/screen.png";
@@ -136,7 +170,7 @@ fn test_action_evaluation_on_real_screen() {
 fn test_action_skipped_when_parent_state_does_not_match() {
     let actions = load_actions_from_config("config/states.yaml")
         .expect("failed to load actions from config/states.yaml");
-    let manager = ActionManager::new(actions);
+    let manager = ActionManager::from_actions(actions);
     let mut matcher = TemplateMatcher::new(".");
 
     let help_screen_path = "roi/HELP/screen.png";
@@ -159,7 +193,7 @@ fn test_action_skipped_when_parent_state_does_not_match() {
 fn test_execute_single_action_manual_shortcut() {
     let actions = load_actions_from_config("config/states.yaml")
         .expect("failed to load actions from config/states.yaml");
-    let manager = ActionManager::new(actions);
+    let manager = ActionManager::from_actions(actions);
     let mut matcher = TemplateMatcher::new(".");
 
     let help_screen_path = "roi/HELP/screen.png";
@@ -224,16 +258,59 @@ fn test_select_click_match() {
 #[test]
 fn test_action_manager_reload_updates_cooldown() {
     let actions = load_actions_from_config("config/states.yaml").expect("load actions");
-    let manager = ActionManager::new(actions);
+    let manager = ActionManager::from_actions(actions);
 
-    // Initial check: loot_claim should have cooldown 1800.0
     let loot_act = manager.list_actions().into_iter().find(|a| a.name == "loot_claim").expect("loot_claim exists");
-    assert_eq!(loot_act.cooldown_s, 1800.0);
+    assert_eq!(loot_act.cooldown_s, 60.0);
 
     // Now call reload_from_yaml
     let res = manager.reload_from_yaml("config/states.yaml");
     assert!(res.is_ok(), "reload_from_yaml must succeed");
 
     let reloaded_loot = manager.list_actions().into_iter().find(|a| a.name == "loot_claim").expect("loot_claim exists");
-    assert_eq!(reloaded_loot.cooldown_s, 1800.0);
+    assert_eq!(reloaded_loot.cooldown_s, 60.0);
+}
+
+#[test]
+fn test_sequence_step_timeout_advances_to_next_step() {
+    let mut act1 = ActionDefinition::new("step1_fails", "Step 1 Fails");
+    act1.state = Some(GameState::AllianceGiftsPremium); // Won't match current state Base
+    
+    let mut act2 = ActionDefinition::new("step2_succeeds", "Step 2 Succeeds");
+    act2.action_type = ActionType::ClickCoords;
+    act2.coords = Some((0.5, 0.5));
+
+    let seq = SequenceDefinition {
+        name: "test_resilient_seq".to_string(),
+        description: "Test sequence resilience".to_string(),
+        enabled: true,
+        shortcut: None,
+        schedules: None,
+        steps: vec![
+            SequenceStep { action: "step1_fails".to_string(), timeout_s: 0.01 },
+            SequenceStep { action: "step2_succeeds".to_string(), timeout_s: 5.0 },
+        ],
+    };
+
+    let manager = ActionManager::new(vec![act1, act2], vec![seq]);
+    assert!(manager.trigger_sequence("test_resilient_seq"));
+    assert!(manager.has_active_sequence());
+
+    let mut matcher = TemplateMatcher::new(".");
+    let dummy_screen = image::RgbaImage::new(100, 100);
+
+    // Wait for step 1 to time out (15ms > 10ms timeout)
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    // First evaluation: step 1 timed out -> should advance to step 2 without aborting sequence
+    let res1 = manager.evaluate_sequence(GameState::Base, &dummy_screen, &mut matcher);
+    assert!(res1.is_none());
+    assert!(manager.has_active_sequence(), "Sequence must still be active after step 1 timeout!");
+
+    // Second evaluation: step 2 executes successfully
+    let res2 = manager.evaluate_sequence(GameState::Base, &dummy_screen, &mut matcher);
+    assert!(res2.is_some(), "Step 2 should execute");
+    let r2 = res2.unwrap();
+    assert!(r2.executed, "Step 2 must execute successfully: {}", r2.reason);
+    assert_eq!(r2.action_name, "step2_succeeds");
 }

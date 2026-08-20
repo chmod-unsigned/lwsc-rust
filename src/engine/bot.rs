@@ -189,7 +189,15 @@ impl GameBot {
                                         action_res.save_cursor,
                                         Some(&mut cb)
                                     );
-                                    st_clone_for_hk.trigger_on_activity("manual_action_drag", Duration::from_millis(150), false);
+                                } else if let Some(ref script_path) = action_res.script {
+                                    let _ = frame.save("last_screenshot.png");
+                                    crate::core::action::run_python_script(
+                                        script_path,
+                                        &action_res.script_args,
+                                        win.window_id,
+                                        Some(current_state.name()),
+                                        Some("last_screenshot.png"),
+                                    );
                                 }
                             } else {
                                 println!(

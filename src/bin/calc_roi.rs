@@ -1,5 +1,5 @@
-//! CLI Tool to automatically compute and write normalized ROIs in `config/states.yaml`
-//! from state directories containing screenshots and expected/template images.
+//! CLI Tool to automatically compute and write normalized ROIs in `config/states.yaml` and `config/buttons.yaml`
+//! from state & button directories containing screenshots and expected/template images.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,12 +13,12 @@ use lwsc2::vision::matching::TemplateMatcher;
 #[derive(Parser, Debug)]
 #[command(
     name = "calc_roi",
-    about = "Calculate normalized ROIs from screenshot/expected images and update states.yaml"
+    about = "Calculate normalized ROIs from screenshot/expected images and update states.yaml / buttons.yaml"
 )]
 struct Args {
     #[arg(
         default_value = "roi",
-        help = "Directory containing state subfolders (e.g. roi/MAIN_SHOP/)"
+        help = "Directory containing state/button subfolders (e.g. roi/MAIN_SHOP/ or roi/HELP/)"
     )]
     dir: String,
 
@@ -38,27 +38,26 @@ struct Args {
 
     #[arg(
         long,
-        default_value = "config/states.yaml",
-        help = "Path to config/states.yaml"
+        help = "Optional custom YAML file path to update instead of searching default config/ files"
     )]
-    config: String,
+    config: Option<String>,
 
     #[arg(
         long,
-        help = "Apply and write calculated ROIs directly to config/states.yaml"
+        help = "Apply and write calculated ROIs directly to config/states.yaml and config/buttons.yaml"
     )]
     apply: bool,
 
     #[arg(
         long,
-        help = "Filter to only process one specific state name (case-insensitive)"
+        help = "Filter to only process one specific state/button name (case-insensitive)"
     )]
     state: Option<String>,
 }
 
 #[derive(Debug)]
-struct StateMatchResult {
-    state_name: String,
+struct MatchResult {
+    item_name: String,
     screen_path: PathBuf,
     template_path: PathBuf,
     image_width: u32,
@@ -175,116 +174,139 @@ fn find_expected_templates(dir: &Path, screen_path: Option<&Path>) -> Vec<PathBu
     templates
 }
 
-fn update_states_yaml(yaml_path: &str, results: &[StateMatchResult]) -> Result<(), Box<dyn std::error::Error>> {
+fn update_single_yaml_file(yaml_path: &str, results: &[MatchResult]) -> Result<usize, Box<dyn std::error::Error>> {
+    if !Path::new(yaml_path).exists() {
+        return Ok(0);
+    }
+
     let content = fs::read_to_string(yaml_path)?;
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+    let mut updated_count = 0;
 
     for res in results {
-        let state_name_target = &res.state_name;
-        let mut in_target_state = false;
-        let mut state_start_line = None;
-        let mut state_end_line = None;
-        let mut existing_roi_line = None;
-        let mut roi_block_end = None;
+        let item_name = &res.item_name;
+        let mut entry_start = None;
+        let mut entry_end = None;
+        let mut entry_indent = 0;
 
         for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
-            if trimmed.starts_with("- state:") || trimmed.starts_with("- id:") {
-                let name = if trimmed.starts_with("- state:") {
-                    trimmed.trim_start_matches("- state:").trim().trim_matches('"')
-                } else {
-                    trimmed.trim_start_matches("- id:").trim().trim_matches('"')
-                };
-                if name.eq_ignore_ascii_case(state_name_target) {
-                    in_target_state = true;
-                    state_start_line = Some(i);
-                } else if in_target_state {
-                    state_end_line = Some(i);
-                    break;
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            // Check map key format: `NAME:` or `"NAME":`
+            let is_map_key = if let Some(colon_pos) = line.find(':') {
+                let key_part = line[..colon_pos].trim().trim_matches('"').trim_matches('\'');
+                let after_colon = line[colon_pos + 1..].trim();
+                key_part.eq_ignore_ascii_case(item_name) && (after_colon.is_empty() || after_colon.starts_with('#') || after_colon.starts_with('{'))
+            } else {
+                false
+            };
+
+            // Check list format: `- state: NAME` or `- id: NAME` or `- name: NAME`
+            let is_list_item = if trimmed.starts_with("- state:") || trimmed.starts_with("- id:") || trimmed.starts_with("- name:") {
+                let val = trimmed.split(':').nth(1).unwrap_or("").trim().trim_matches('"').trim_matches('\'');
+                val.eq_ignore_ascii_case(item_name)
+            } else {
+                false
+            };
+
+            if is_map_key || is_list_item {
+                entry_start = Some(i);
+                entry_indent = line.len() - line.trim_start().len();
+
+                // Find end of entry block
+                let mut j = i + 1;
+                while j < lines.len() {
+                    let next_line = &lines[j];
+                    let next_trimmed = next_line.trim();
+                    if next_trimmed.is_empty() || next_trimmed.starts_with('#') {
+                        j += 1;
+                        continue;
+                    }
+                    let next_indent = next_line.len() - next_line.trim_start().len();
+                    if next_indent <= entry_indent {
+                        break;
+                    }
+                    j += 1;
                 }
-            } else if in_target_state && (trimmed == "states:" || trimmed == "buttons:" || trimmed == "actions:") {
-                state_end_line = Some(i);
+                entry_end = Some(j);
                 break;
             }
         }
 
-        let start_idx = match state_start_line {
-            Some(idx) => idx,
-            None => {
-                println!(
-                    "  {} State {} not found in {}",
-                    "[WARN]".yellow().bold(),
-                    state_name_target.bold(),
-                    yaml_path
-                );
-                continue;
-            }
+        let (start_idx, end_idx) = match (entry_start, entry_end) {
+            (Some(s), Some(e)) => (s, e),
+            _ => continue,
         };
-        let end_idx = state_end_line.unwrap_or(lines.len());
 
-        // Locate existing roi definition within this state block
-        let mut j = start_idx;
-        while j < end_idx {
-            let trimmed = lines[j].trim();
+        // Locate existing roi line(s) within the entry block
+        let mut roi_start = None;
+        let mut roi_end = None;
+
+        let mut k = start_idx;
+        while k < end_idx {
+            let trimmed = lines[k].trim();
             if trimmed.starts_with("roi:") {
-                existing_roi_line = Some(j);
-                // check if it's a multi-line roi block
+                roi_start = Some(k);
                 if trimmed == "roi:" {
-                    let mut k = j + 1;
-                    while k < end_idx {
-                        let inner_trim = lines[k].trim();
+                    // Multi-line roi block
+                    let mut m = k + 1;
+                    while m < end_idx {
+                        let inner_trim = lines[m].trim();
                         if inner_trim.starts_with("xmin:")
                             || inner_trim.starts_with("xmax:")
                             || inner_trim.starts_with("ymin:")
                             || inner_trim.starts_with("ymax:")
                         {
-                            k += 1;
+                            m += 1;
                         } else {
                             break;
                         }
                     }
-                    roi_block_end = Some(k);
+                    roi_end = Some(m);
                 } else {
-                    roi_block_end = Some(j + 1);
+                    roi_end = Some(k + 1);
                 }
                 break;
             }
-            j += 1;
+            k += 1;
         }
 
-        let formatted_roi = vec![
-            "  roi:".to_string(),
-            format!("    xmin: {:.2}", res.roi.xmin),
-            format!("    xmax: {:.2}", res.roi.xmax),
-            format!("    ymin: {:.2}", res.roi.ymin),
-            format!("    ymax: {:.2}", res.roi.ymax),
-        ];
+        let indent_str = " ".repeat(entry_indent + 2);
+        let new_roi_line = format!(
+            "{}roi: {{ xmin: {:.2}, xmax: {:.2}, ymin: {:.2}, ymax: {:.2} }}",
+            indent_str, res.roi.xmin, res.roi.xmax, res.roi.ymin, res.roi.ymax
+        );
 
-        if let (Some(r_start), Some(r_end)) = (existing_roi_line, roi_block_end) {
-            // Replace existing roi lines
-            lines.splice(r_start..r_end, formatted_roi);
+        if let (Some(rs), Some(re)) = (roi_start, roi_end) {
+            lines.splice(rs..re, vec![new_roi_line]);
         } else {
-            // Insert roi before min_confidence or description or at end of state block
+            // Insert roi before min_confidence, description, or at end
             let mut insert_pos = end_idx;
-            for k in start_idx..end_idx {
-                let trimmed = lines[k].trim();
+            for idx in start_idx..end_idx {
+                let trimmed = lines[idx].trim();
                 if trimmed.starts_with("min_confidence:") || trimmed.starts_with("description:") {
-                    insert_pos = k;
+                    insert_pos = idx;
                     break;
                 }
             }
-            for (offset, roi_line) in formatted_roi.into_iter().enumerate() {
-                lines.insert(insert_pos + offset, roi_line);
-            }
+            lines.insert(insert_pos, new_roi_line);
         }
+
+        updated_count += 1;
     }
 
-    let mut new_content = lines.join("\n");
-    if !new_content.ends_with('\n') {
-        new_content.push('\n');
+    if updated_count > 0 {
+        let mut new_content = lines.join("\n");
+        if !new_content.ends_with('\n') {
+            new_content.push('\n');
+        }
+        fs::write(yaml_path, new_content)?;
     }
-    fs::write(yaml_path, new_content)?;
-    Ok(())
+
+    Ok(updated_count)
 }
 
 fn round_norm(val: f32) -> f32 {
@@ -297,12 +319,11 @@ fn main() {
 
     println!(
         "\n{}",
-        "=== LWSC2 State ROI Calculator & Configurator ==="
+        "=== LWSC2 State & Button ROI Calculator ==="
             .bold()
             .bright_cyan()
     );
     println!("Base search directory : {}", args.dir.bold());
-    println!("Configuration file    : {}", args.config.bold());
     println!("Safety margin         : {:.1}%", args.margin * 100.0);
     println!("Min confidence        : {:.1}%\n", args.min_confidence * 100.0);
 
@@ -312,12 +333,21 @@ fn main() {
             "[ERROR]".red().bold(),
             args.dir
         );
-        eprintln!("Please create subdirectories named after states (e.g. '{}/MAIN_SHOP_HOT_DEALS/') with 'screen.png' and 'expected.png'.", args.dir);
         std::process::exit(1);
     }
 
+    let config_targets = if let Some(ref custom_cfg) = args.config {
+        vec![custom_cfg.clone()]
+    } else {
+        vec![
+            "config/states.yaml".to_string(),
+            "config/buttons.yaml".to_string(),
+            "config/actions.yaml".to_string(),
+        ]
+    };
+
     // Load states configuration for fallback template lookups
-    let state_defs = load_state_definitions(&args.config).unwrap_or_default();
+    let state_defs = load_state_definitions("config/states.yaml").unwrap_or_default();
 
     let mut matcher = TemplateMatcher::new(".");
     let mut computed_results = Vec::new();
@@ -344,9 +374,6 @@ fn main() {
             "[INFO]".yellow().bold(),
             args.dir
         );
-        println!("Expected structure:");
-        println!("  {}/<STATE_NAME>/screen.png", args.dir);
-        println!("  {}/<STATE_NAME>/expected.png (or template.png)\n", args.dir);
         return;
     }
 
@@ -367,7 +394,7 @@ fn main() {
         let state_start = std::time::Instant::now();
 
         println!(
-            "{} Checking state folder: {}",
+            "{} Checking asset folder: {}",
             "▶".bright_blue().bold(),
             folder_name.bold().green()
         );
@@ -471,8 +498,8 @@ fn main() {
                 PathBuf::from(format!("{} ({} templates)", state_dir.join("expected").display(), template_paths.len()))
             };
 
-            Some(StateMatchResult {
-                state_name: folder_name.to_string(),
+            Some(MatchResult {
+                item_name: folder_name.to_string(),
                 screen_path: screen_path.clone(),
                 template_path: display_tmpl_path,
                 image_width: w,
@@ -536,7 +563,7 @@ fn main() {
 
     println!("{}", "===============================================".bright_black());
     println!(
-        "Summary: Processed {} state directory(ies), computed {} ROI(s) in {:.2}ms.",
+        "Summary: Processed {} asset directory(ies), computed {} ROI(s) in {:.2}ms.",
         state_dirs.len(),
         computed_results.len().to_string().bold().green(),
         total_elapsed.as_secs_f64() * 1000.0
@@ -547,31 +574,42 @@ fn main() {
     }
 
     if args.apply {
-        println!("\nWriting updated ROIs to {}...", args.config.bold());
-        match update_states_yaml(&args.config, &computed_results) {
-            Ok(_) => {
-                println!(
-                    "{} Successfully updated {} state ROI definitions in {}!\n",
-                    "[SUCCESS]".green().bold(),
-                    computed_results.len(),
-                    args.config
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "{} Failed to update {}: {}",
-                    "[ERROR]".red().bold(),
-                    args.config,
-                    e
-                );
+        println!("\nApplying updated ROIs to configuration files...");
+        let mut total_applied = 0;
+        for target in &config_targets {
+            match update_single_yaml_file(target, &computed_results) {
+                Ok(count) => {
+                    if count > 0 {
+                        println!(
+                            "  {} Updated {} definitions in {}",
+                            "[SUCCESS]".green().bold(),
+                            count,
+                            target.bold()
+                        );
+                        total_applied += count;
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  {} Failed to update {}: {}",
+                        "[ERROR]".red().bold(),
+                        target,
+                        e
+                    );
+                }
             }
         }
+        println!(
+            "\n{} Total definitions updated: {} across configuration files.\n",
+            "[COMPLETE]".green().bold(),
+            total_applied
+        );
     } else {
         println!(
-            "\n{} Run with '{}' to write these ROIs directly to {}.\n",
+            "\n{} Run with '{}' or '{}' to write these ROIs directly to YAML config files.\n",
             "[DRY-RUN]".yellow().bold(),
             "--apply".bold().cyan(),
-            args.config.bold()
+            "make calc-roi-apply".bold().cyan()
         );
     }
 }

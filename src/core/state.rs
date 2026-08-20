@@ -1,6 +1,6 @@
 //! Game state definitions, metadata, and YAML configuration for Last War: Survival in Rust.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -24,6 +24,7 @@ pub enum GameState {
     MainShopMall,
     MainShopMallHotSalePacks,
     MainShopMallOfficialEvent,
+    MainShopMallWeeklyDeal,
     Alliance,
     AllianceGiftsRegular,
     AllianceGiftsPremium,
@@ -93,6 +94,7 @@ impl GameState {
             GameState::MainShopMall => "MAIN_SHOP_MALL",
             GameState::MainShopMallHotSalePacks => "MAIN_SHOP_MALL_HOT_SALE_PACKS",
             GameState::MainShopMallOfficialEvent => "MAIN_SHOP_MALL_OFFICIAL_EVENT",
+            GameState::MainShopMallWeeklyDeal => "MAIN_SHOP_MALL_WEEKLY_DEAL",
             GameState::Alliance => "ALLIANCE",
             GameState::AllianceGiftsRegular => "ALLIANCE_GIFTS_REGULAR",
             GameState::AllianceGiftsPremium => "ALLIANCE_GIFTS_PREMIUM",
@@ -118,6 +120,7 @@ impl GameState {
             "MAIN_SHOP_MALL" => Some(GameState::MainShopMall),
             "MAIN_SHOP_MALL_HOT_SALE_PACKS" | "MAIN_SHOP_HOT_SALE_PACKS" => Some(GameState::MainShopMallHotSalePacks),
             "MAIN_SHOP_MALL_OFFICIAL_EVENT" | "MAIN_SHOP_MAIN_OFFICIAL_EVENT" | "MAIN_SHOP_OFFICIAL_EVENT" => Some(GameState::MainShopMallOfficialEvent),
+            "MAIN_SHOP_MALL_WEEKLY_DEAL" | "MAIN_SHOP_WEEKLY_DEAL" | "MAIN_SHOP_MALL_WEEKLY_DEALS" => Some(GameState::MainShopMallWeeklyDeal),
             "ALLIANCE" => Some(GameState::Alliance),
             "ALLIANCE_GIFTS_REGULAR" | "ALLIANCE_GIFTS" | "ALLIANCE_GIFT" => Some(GameState::AllianceGiftsRegular),
             "ALLIANCE_GIFTS_PREMIUM" | "ALLIANCE_GIFTS_RARE" | "ALLIANCE_GIFT_PREMIUM" => Some(GameState::AllianceGiftsPremium),
@@ -242,11 +245,11 @@ impl NormalizedROI {
     }
 }
 
-fn default_min_confidence() -> f32 {
+pub fn default_min_confidence() -> f32 {
     0.80
 }
 
-fn deserialize_parent_names<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+pub fn deserialize_parent_names<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -266,12 +269,75 @@ where
     }
 }
 
+pub fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        Single(String),
+        Multiple(Vec<String>),
+    }
+
+    let opt: Option<StringOrVec> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(Vec::new()),
+        Some(StringOrVec::Single(s)) => Ok(vec![s]),
+        Some(StringOrVec::Multiple(v)) => Ok(v),
+    }
+}
+
+pub fn deserialize_gamestates_or_single<'de, D>(deserializer: D) -> Result<Vec<GameState>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SingleOrVec {
+        Single(GameState),
+        Multiple(Vec<GameState>),
+    }
+
+    let opt: Option<SingleOrVec> = Option::deserialize(deserializer)?;
+    match opt {
+        None => Ok(Vec::new()),
+        Some(SingleOrVec::Single(s)) => Ok(vec![s]),
+        Some(SingleOrVec::Multiple(v)) => Ok(v),
+    }
+}
+
+fn default_state_type() -> StateType {
+    StateType::Modal
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateDefinitionEntry {
+    #[serde(default)]
+    pub state: Option<GameState>,
+    #[serde(rename = "type", default = "default_state_type")]
+    pub state_type: StateType,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub templates: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_parent_names", rename = "parent")]
+    pub parent_names: Vec<String>,
+    #[serde(default)]
+    pub roi: Option<NormalizedROI>,
+    #[serde(default = "default_min_confidence")]
+    pub min_confidence: f32,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateDefinition {
     pub state: GameState,
     #[serde(rename = "type")]
     pub state_type: StateType,
     pub display_name: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
     pub templates: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_parent_names", rename = "parent")]
     pub parent_names: Vec<String>,
@@ -365,10 +431,33 @@ impl Default for ShortcutsConfig {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StatesContent {
+    WrapperMap {
+        states: BTreeMap<String, StateDefinitionEntry>,
+    },
+    WrapperList {
+        states: Vec<StateDefinition>,
+    },
+    DirectMap(BTreeMap<String, StateDefinitionEntry>),
+    DirectList(Vec<StateDefinition>),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ShortcutsContent {
+    Wrapper {
+        shortcuts: ShortcutsConfig,
+    },
+    Direct(ShortcutsConfig),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatesConfigFile {
     #[serde(default)]
     pub shortcuts: ShortcutsConfig,
+    #[serde(default)]
     pub states: Vec<StateDefinition>,
     #[serde(default)]
     pub buttons: Vec<crate::core::button::ButtonDefinition>,
@@ -383,11 +472,13 @@ pub static STATE_DEFINITIONS: LazyLock<Vec<StateDefinition>> = LazyLock::new(|| 
 });
 
 pub static BUTTON_DEFINITIONS: LazyLock<Vec<crate::core::button::ButtonDefinition>> = LazyLock::new(|| {
-    crate::core::button::load_buttons_from_config("config/states.yaml").unwrap_or_default()
+    crate::core::button::load_buttons_from_config("config/buttons.yaml")
+        .or_else(|_| crate::core::button::load_buttons_from_config("config/states.yaml"))
+        .unwrap_or_default()
 });
 
 pub static SHORTCUTS_CONFIG: LazyLock<ShortcutsConfig> = LazyLock::new(|| {
-    load_shortcuts_from_config("config/states.yaml")
+    load_shortcuts_from_config("config/shortcuts.yaml")
 });
 
 pub fn get_state_definition(state: GameState) -> Option<StateDefinition> {
@@ -399,34 +490,101 @@ pub fn get_button_definition(id: &str) -> Option<crate::core::button::ButtonDefi
 }
 
 pub fn load_shortcuts_from_config<P: AsRef<Path>>(path: P) -> ShortcutsConfig {
-    if let Ok(content) = std::fs::read_to_string(path) {
-        if let Ok(parsed) = serde_yaml::from_str::<StatesConfigFile>(&content) {
-            return parsed.shortcuts;
+    let p = path.as_ref();
+    let candidates = [
+        p.to_path_buf(),
+        Path::new("config/shortcuts.yaml").to_path_buf(),
+        Path::new("config/states.yaml").to_path_buf(),
+    ];
+
+    for candidate in &candidates {
+        if candidate.exists() {
+            if let Ok(content) = std::fs::read_to_string(candidate) {
+                if let Ok(parsed) = serde_yaml::from_str::<ShortcutsContent>(&content) {
+                    return match parsed {
+                        ShortcutsContent::Wrapper { shortcuts } => shortcuts,
+                        ShortcutsContent::Direct(shortcuts) => shortcuts,
+                    };
+                }
+            }
         }
     }
     ShortcutsConfig::default()
 }
 
+pub fn parse_states_from_str(content: &str) -> Result<Vec<StateDefinition>, Box<dyn std::error::Error>> {
+    let content_parsed: StatesContent = serde_yaml::from_str(content)?;
+    let mut states = Vec::new();
+    match content_parsed {
+        StatesContent::WrapperList { states: list } | StatesContent::DirectList(list) => {
+            states = list;
+        }
+        StatesContent::WrapperMap { states: map } | StatesContent::DirectMap(map) => {
+            for (key, entry) in map {
+                let st = entry.state.or_else(|| GameState::from_str(&key)).unwrap_or(GameState::Unknown);
+                let display_name = entry.display_name.unwrap_or_else(|| key.clone());
+                let description = entry.description.unwrap_or_default();
+                states.push(StateDefinition {
+                    state: st,
+                    state_type: entry.state_type,
+                    display_name,
+                    templates: entry.templates,
+                    parent_names: entry.parent_names,
+                    roi: entry.roi,
+                    min_confidence: entry.min_confidence,
+                    description,
+                });
+            }
+        }
+    }
+    Ok(states)
+}
+
 pub fn load_state_definitions<P: AsRef<Path>>(path: P) -> Result<Vec<StateDefinition>, Box<dyn std::error::Error>> {
-    let content = std::fs::read_to_string(path)?;
-    let parsed: StatesConfigFile = serde_yaml::from_str(&content)?;
-    Ok(parsed.states)
+    let p = path.as_ref();
+    if p.exists() {
+        let content = std::fs::read_to_string(p)?;
+        return parse_states_from_str(&content);
+    }
+    parse_states_from_str(DEFAULT_STATES_YAML)
 }
 
 pub fn load_actions_from_config<P: AsRef<Path>>(path: P) -> Result<Vec<crate::core::action::ActionDefinition>, Box<dyn std::error::Error>> {
-    let content = std::fs::read_to_string(path)?;
-    let parsed: StatesConfigFile = serde_yaml::from_str(&content)?;
-    let mut actions = parsed.actions;
+    let p = path.as_ref();
+    let actions_path = if (p.ends_with("states.yaml") || p.ends_with("sequences.yaml") || p.ends_with("buttons.yaml")) && Path::new("config/actions.yaml").exists() {
+        Path::new("config/actions.yaml")
+    } else if Path::new("config/actions.yaml").exists() && !p.ends_with("actions.yaml") {
+        Path::new("config/actions.yaml")
+    } else {
+        p
+    };
+
+    let content = std::fs::read_to_string(actions_path)?;
+    let mut actions = crate::core::action::parse_actions_from_str(&content)?;
+    
+    // Resolve with button definitions
+    let buttons = crate::core::button::load_buttons_from_config("config/buttons.yaml")
+        .or_else(|_| crate::core::button::load_buttons_from_config("config/states.yaml"))
+        .unwrap_or_default();
+
     for action in actions.iter_mut() {
-        action.resolve_button(&parsed.buttons);
+        action.resolve_button(&buttons);
     }
     Ok(actions)
 }
 
 pub fn load_sequences_from_config<P: AsRef<Path>>(path: P) -> Result<Vec<crate::core::action::SequenceDefinition>, Box<dyn std::error::Error>> {
-    let content = std::fs::read_to_string(path)?;
-    let parsed: StatesConfigFile = serde_yaml::from_str(&content)?;
-    Ok(parsed.sequences)
+    let p = path.as_ref();
+    let sequences_path = if (p.ends_with("states.yaml") || p.ends_with("actions.yaml") || p.ends_with("buttons.yaml")) && Path::new("config/sequences.yaml").exists() {
+        Path::new("config/sequences.yaml")
+    } else if Path::new("config/sequences.yaml").exists() && !p.ends_with("sequences.yaml") {
+        Path::new("config/sequences.yaml")
+    } else {
+        p
+    };
+
+    let content = std::fs::read_to_string(sequences_path)?;
+    crate::core::action::parse_sequences_from_str(&content)
 }
 
 pub fn load_state_definitions_or_default(custom_path: Option<&str>) -> Vec<StateDefinition> {
@@ -437,7 +595,5 @@ pub fn load_state_definitions_or_default(custom_path: Option<&str>) -> Vec<State
             }
         }
     }
-    serde_yaml::from_str::<StatesConfigFile>(DEFAULT_STATES_YAML)
-        .map(|cfg| cfg.states)
-        .unwrap_or_default()
+    load_state_definitions("config/states.yaml").unwrap_or_default()
 }

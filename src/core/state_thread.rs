@@ -386,6 +386,15 @@ fn perform_detection(
                         action_res.save_cursor,
                         Some(&mut cb)
                     );
+                } else if let Some(ref script_path) = action_res.script {
+                    let _ = frame.save("last_screenshot.png");
+                    crate::core::action::run_python_script(
+                        script_path,
+                        &action_res.script_args,
+                        win.window_id,
+                        Some(res.state.name()),
+                        Some("last_screenshot.png"),
+                    );
                 }
             }
         }

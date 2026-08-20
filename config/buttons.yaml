@@ -1,0 +1,142 @@
+MAIN_SHOP_BUTTON:
+  display_name: Main Shop Button
+  parent_states: [BASE, AREA]
+  target_state: MAIN_SHOP_MALL_HOT_SALE_PACKS
+  roi: { xmin: 0.87, xmax: 1.00, ymin: 0.00, ymax: 0.09 }
+  min_confidence: 0.80
+  description: Main Shop entrance button on Base and Area screens.
+
+ALLIANCE_BUTTON:
+  display_name: Alliance Button
+  parent_states: [BASE, AREA]
+  target_state: ALLIANCE
+  roi: { xmin: 0.90, xmax: 1.00, ymin: 0.63, ymax: 0.78 }
+  min_confidence: 0.8
+  description: Alliance menu button on Base and Area screens.
+
+MAIL_BUTTON:
+  display_name: Mail Button
+  parent_states: [BASE, AREA]
+  target_state: MAIL
+  roi: { xmin: 0.89, xmax: 1.00, ymin: 0.71, ymax: 0.84 }
+  min_confidence: 0.75
+  description: Mailbox entrance button on Base and Area screens.
+
+ALLIANCE_GIFTS_BUTTON:
+  display_name: Alliance Gifts Button
+  parent_states: [ALLIANCE]
+  target_state: ALLIANCE_GIFTS_REGULAR
+  roi: { xmin: 0.32, xmax: 0.54, ymin: 0.50, ymax: 0.66 }
+  min_confidence: 0.85
+  description: Alliance gifts claim button inside Alliance menu leading to regular gifts.
+
+ALLIANCE_GIFTS_PREMIUM_BUTTON:
+  display_name: Alliance Premium Gifts Button
+  parent_states: [ALLIANCE, ALLIANCE_GIFTS_REGULAR]
+  target_state: ALLIANCE_GIFTS_PREMIUM
+  roi: { xmin: 0.28, xmax: 0.67, ymin: 0.00, ymax: 0.33 }
+  min_confidence: 0.85
+  description: Alliance premium gifts tab button leading to premium gifts.
+
+HELP_BUTTON:
+  display_name: Alliance Help Button
+  parent_states: [BASE, AREA]
+  roi: { xmin: 0.86, xmax: 0.98, ymin: 0.64, ymax: 0.77 }
+  min_confidence: 0.85
+  save_cursor: true
+  description: Alliance help prompt button appearing on Base and Area screens.
+
+RADAR_TASKS_BUTTON:
+  display_name: Radar Tasks Button
+  parent_states: [BASE, AREA]
+  target_state: RADAR_TASKS
+  roi: { xmin: 0.55, xmax: 0.68, ymin: 0.44, ymax: 0.56 }
+  min_confidence: 0.70
+  description: Radar tasks prompt button appearing on Base and Area screens.
+
+LOOT_BUTTON:
+  display_name: Loot Button
+  parent_states: [BASE, AREA]
+  target_state: LOOT
+  roi: { xmin: 0.08, xmax: 0.20, ymin: 0.17, ymax: 0.29 }
+  min_confidence: 0.8
+  description: Loot prompt button appearing on Base and Area screens.
+
+LOOT_CLAIM_ALL_BUTTON:
+  display_name: Loot Claim All Button
+  parent_states: [LOOT]
+  click_template: claim_all.png
+  roi: { xmin: 0.40, xmax: 0.59, ymin: 0.69, ymax: 0.83 }
+  min_confidence: 0.8
+  description: Claim All button inside Loot collection modal.
+
+INVENTORY_BUTTON:
+  display_name: Inventory Button
+  parent_states: [BASE, AREA]
+  target_state: INVENTORY_SPECIAL
+  roi: { xmin: 0.90, xmax: 1.00, ymin: 0.79, ymax: 0.94 }
+  min_confidence: 0.85
+  description: Inventory button appearing on Base and Area screens.
+
+WORLD_MAP_BUTTON:
+  display_name: World Button
+  parent_states: [BASE]
+  target_state: AREA
+  roi: { xmin: 0.88, xmax: 1.00, ymin: 0.86, ymax: 1.00 }
+  min_confidence: 0.8
+  description: Return to area from base.
+
+AREA_BASE_BUTTON:
+  display_name: Base Button (from Area)
+  parent_states: [AREA]
+  target_state: BASE
+  roi: { xmin: 0.88, xmax: 1.00, ymin: 0.86, ymax: 1.00 }
+  min_confidence: 0.85
+  description: Return to base view from area screen.
+
+WORLD_MAP_BASE_BUTTON:
+  display_name: Base Button (from World Map)
+  parent_states: [WORLD_MAP]
+  target_state: BASE
+  roi: { xmin: 0.88, xmax: 1.00, ymin: 0.86, ymax: 1.00 }
+  min_confidence: 0.85
+  description: Return to base view from world map.
+
+MAIN_SHOP_HOT_DEALS_BUTTON:
+  display_name: Main Shop Hot Deals Tab
+  parent_states: [MAIN_SHOP]
+  target_state: MAIN_SHOP_HOT_DEALS
+  roi: { xmin: 0.32, xmax: 0.47, ymin: 0.00, ymax: 0.09 }
+  min_confidence: 0.85
+  description: Hot Deals tab button in Main Shop.
+
+MAIN_SHOP_MALL_HOT_SALE_PACKS_BUTTON:
+  display_name: Main Shop Mall Hot Sale Packs Tab
+  parent_states: [MAIN_SHOP, MAIN_SHOP_MALL]
+  target_state: MAIN_SHOP_MALL_HOT_SALE_PACKS
+  roi: { xmin: 0.28, xmax: 0.60, ymin: 0.00, ymax: 0.19 }
+  min_confidence: 0.85
+  description: Hot Sale Packs tab button in Main Shop Mall.
+
+MAIN_SHOP_MALL_OFFICIAL_EVENT_BUTTON:
+  display_name: Main Shop Mall Official Event Tab
+  parent_states: [MAIN_SHOP, MAIN_SHOP_MALL]
+  target_state: MAIN_SHOP_MALL_OFFICIAL_EVENT
+  roi: { xmin: 0.36, xmax: 0.60, ymin: 0.00, ymax: 0.19 }
+  min_confidence: 0.85
+  description: Official Event tab button in Main Shop Mall.
+
+MAIN_SHOP_MALL_WEEKLY_DEAL_BUTTON:
+  display_name: Main Shop Mall Weekly Deal Tab
+  parent_states: [MAIN_SHOP, MAIN_SHOP_MALL]
+  target_state: MAIN_SHOP_MALL_WEEKLY_DEAL
+  roi: { xmin: 0.44, xmax: 0.62, ymin: 0.00, ymax: 0.19 }
+  min_confidence: 0.85
+  description: Weekly Deal tab button in Main Shop Mall.
+
+MAIN_SHOP_MALL_HOT_SALE_PACKS_CLAIM_BUTTON:
+  display_name: Claim Free Pack Button
+  parent_states: [MAIN_SHOP_MALL_HOT_SALE_PACKS]
+  roi: { xmin: 0.28, xmax: 0.43, ymin: 0.70, ymax: 0.86 }
+  min_confidence: 0.85
+  description: Free claim chest button inside Hot Sale Packs tab of Main Shop Mall.
