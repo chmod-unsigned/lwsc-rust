@@ -1,0 +1,238 @@
+alliance_gift_claim:
+  display_name: Claim gift from alliance menu
+  description: Auto-claim all available regular alliance gifts
+  enabled: false
+  button: ALLIANCE_GIFTS_BUTTON
+  state: ALLIANCE_GIFTS_REGULAR
+  parent_states:
+  - ALLIANCE
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.32
+    xmax: 0.54
+    ymin: 0.50
+    ymax: 0.66
+  template: assets/button/alliance_gifts_button/expected.png
+  cooldown_s: 5.00
+  priority: 2
+  shortcut: ctrl+2
+alliance_help:
+  display_name: Alliance Help
+  description: Auto-click Alliance Help button when visible in bottom-right area
+  button: HELP_BUTTON
+  parent_states:
+  - BASE
+  - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.86
+    xmax: 0.98
+    ymin: 0.64
+    ymax: 0.77
+  save_cursor: true
+  template: assets/state/help/expected.png
+  cooldown_s: 5.00
+  priority: 1
+  shortcut: ctrl+1
+area_from_base:
+  display_name: Area view
+  description: Go to area from base and center base
+  enabled: false
+  button: WORLD_MAP_BUTTON
+  parent_states:
+  - BASE
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.88
+    xmax: 1.00
+    ymin: 0.86
+    ymax: 1.00
+  template: assets/button/world_map_button/expected.png
+  cooldown_s: 3.00
+  priority: 3
+  shortcut: ctrl+w
+base_view_from_area:
+  display_name: Base view (from Area)
+  description: Go to base view from area
+  enabled: false
+  button: AREA_BASE_BUTTON
+  parent_states:
+  - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.88
+    xmax: 1.00
+    ymin: 0.86
+    ymax: 1.00
+  template: assets/button/area_base_button/expected.png
+  cooldown_s: 3.00
+  priority: 3
+  shortcut: ctrl+b
+base_view_from_world_map:
+  display_name: Base view (from World)
+  description: Go to base view from world map
+  enabled: false
+  button: WORLD_MAP_BASE_BUTTON
+  parent_states:
+  - WORLD_MAP
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.88
+    xmax: 1.00
+    ymin: 0.86
+    ymax: 1.00
+  template: assets/button/world_map_base_button/expected.png
+  cooldown_s: 3.00
+  priority: 3
+  shortcut: ctrl+b
+drag_to_right:
+  display_name: Drag to right
+  enabled: false
+  action_type: drag_drop
+  drag_start:
+  - 0.80
+  - 0.50
+  drag_end:
+  - 0.20
+  - 0.50
+  drag_duration_ms: 1000
+  shortcut: ctrl+r
+loot_claim:
+  display_name: Loot button
+  description: Auto-claim loot rewards when loot button appears
+  button: LOOT_BUTTON
+  parent_states:
+  - BASE
+  - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.08
+    xmax: 0.20
+    ymin: 0.17
+    ymax: 0.29
+  template: assets/button/loot_button/expected/
+  cooldown_s: 60.00
+  priority: 2
+  shortcut: ctrl+3
+loot_claim_all:
+  display_name: Loot claim all
+  description: Auto-click Claim All button inside Loot collection modal
+  button: LOOT_CLAIM_ALL_BUTTON
+  state: LOOT
+  parent_states:
+  - LOOT
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.40
+    xmax: 0.59
+    ymin: 0.69
+    ymax: 0.83
+  template: assets/button/loot_claim_all_button/expected/
+  click_template: claim_all.png
+  cooldown_s: 3.00
+  priority: 2
+  shortcut: ctrl+4
+main_shop:
+  display_name: Open Main Shop
+  description: Open Main Shop modal from Base/Area
+  enabled: false
+  button: MAIN_SHOP_BUTTON
+  parent_states:
+  - BASE
+  - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.87
+    xmax: 1.00
+    ymin: 0.00
+    ymax: 0.09
+  template: assets/button/main_shop_button/expected.png
+  cooldown_s: 3.00
+  priority: 3
+main_shop_mall:
+  display_name: Open Main Shop Mall
+  description: Open Mall tab inside Main Shop
+  enabled: false
+  button: MAIN_SHOP_MALL_HOT_SALE_PACKS_BUTTON
+  parent_states:
+  - MAIN_SHOP
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.28
+    xmax: 0.60
+    ymin: 0.00
+    ymax: 0.19
+  template: assets/state/main_shop_mall_hot_sale_packs/expected/
+  cooldown_s: 3.00
+  priority: 3
+main_shop_mall_hot_sale_packs:
+  display_name: Main Shop - Mall - Hot Sale Packs
+  description: Main Shop - Mall - Hot Sale Packs
+  enabled: false
+  button: MAIN_SHOP_MALL_HOT_SALE_PACKS_BUTTON
+  parent_states:
+  - MAIN_SHOP
+  - MAIN_SHOP_MALL
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.28
+    xmax: 0.60
+    ymin: 0.00
+    ymax: 0.19
+  template: assets/state/main_shop_mall_hot_sale_packs/expected/
+  cooldown_s: 5.00
+  priority: 3
+  shortcut: ctrl+p
+main_shop_mall_hot_sale_packs_claim:
+  display_name: Claim Hot Sale Pack from Shop Mall
+  description: Claim Hot Sale Pack from Shop Mall
+  enabled: false
+  button: MAIN_SHOP_MALL_HOT_SALE_PACKS_CLAIM_BUTTON
+  parent_states:
+  - MAIN_SHOP_MALL_HOT_SALE_PACKS
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.28
+    xmax: 0.43
+    ymin: 0.70
+    ymax: 0.86
+  template: assets/button/main_shop_mall_hot_sale_packs_claim_button/expected/
+  cooldown_s: 5.00
+  priority: 3
+  shortcut: ctrl+p
+radar_task_claim:
+  display_name: Radar Tasks Claim
+  description: Auto-claim radar mission rewards when prompt appears
+  enabled: false
+  button: RADAR_TASKS_BUTTON
+  parent_states:
+  - BASE
+  - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.00
+    xmax: 0.09
+    ymin: 0.66
+    ymax: 0.78
+  template: assets/button/radar_tasks_button/expected.png
+  cooldown_s: 3.00
+  priority: 3
+search_gold_mine:
+  display_name: Gold mine
+  description: Search and click gold mine POI on map
+  parent_states:
+  - BASE
+  - AREA
+  - WORLD_MAP
+  drag_duration_ms: 1000
+  coords:
+  - 0.50
+  - 0.50
+  roi:
+    xmin: 0.00
+    xmax: 1.00
+    ymin: 0.00
+    ymax: 1.00
+  template: assets/poi/gold_mine.png
+  priority: 1
+  shortcut: ctrl+g

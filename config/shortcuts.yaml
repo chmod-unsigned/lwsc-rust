@@ -1,0 +1,5 @@
+toggle_pause: ctrl+p
+open_config: ctrl+o
+quick_launcher: ctrl+x
+force_detect: ctrl+s
+show_help: ctrl+h

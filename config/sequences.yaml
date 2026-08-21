@@ -1,0 +1,32 @@
+morning_routine:
+  description: Morning routine
+  shortcut: shift+m
+  steps:
+  - action: loot_claim
+  - action: loot_claim_all
+  - action: main_shop
+  - action: main_shop_mall_hot_sale_packs_claim
+    timeout_s: 10.0
+  schedules:
+    every_day:
+    - 04:01
+search_gold_mine:
+  description: Gold mine research
+  loop: true
+  shortcut: shift+g
+  steps:
+  - action: search_gold_mine
+  - action: drag_to_right
+sequence_loot_claim:
+  description: Claim loot and then click claim all
+  shortcut: shift+l
+  steps:
+  - action: loot_claim
+  - action: loot_claim_all
+  schedules:
+    every_day:
+    - 00:00
+    - 04:00
+    - 12:00
+    - 16:00
+    - 20:00

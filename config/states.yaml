@@ -1,0 +1,145 @@
+BASE:
+  display_name: Base (Headquarter)
+  type: root
+  templates: assets/state/base/expected.png
+  roi: { xmin: 0.88, xmax: 1.00, ymin: 0.86, ymax: 1.00 }
+  min_confidence: 0.90
+  description: Inner city base view with world map button visible in bottom right.
+
+AREA:
+  display_name: Area (Wilderness Map)
+  type: root
+  templates: assets/state/area/expected.png
+  roi: { xmin: 0.88, xmax: 1.00, ymin: 0.86, ymax: 1.00 }
+  min_confidence: 0.90
+  description: Area map view around player base with base/headquarter button visible in bottom right.
+
+WORLD_MAP:
+  display_name: World Map
+  type: root
+  templates: assets/state/world_map/expected.png
+  roi: { xmin: 0.88, xmax: 1.00, ymin: 0.86, ymax: 1.00 }
+  min_confidence: 0.90
+  description: World map view with base/headquarter button visible in bottom right.
+
+MAIN_SHOP:
+  display_name: Main Shop
+  type: modal
+  parent: MAIN_SHOP_BUTTON
+  roi: { xmin: 0.87, xmax: 1.00, ymin: 0.00, ymax: 0.09 }
+  min_confidence: 0.85
+  description: Main Shop container screen.
+
+MAIN_SHOP_HOT_DEALS:
+  display_name: Main Shop (Hot Deals)
+  type: modal
+  templates: assets/state/main_shop_hot_deals/expected.png
+  parent: MAIN_SHOP
+  roi: { xmin: 0.32, xmax: 0.47, ymin: 0.00, ymax: 0.09 }
+  min_confidence: 0.85
+  description: Main Shop with Hot Deals tab active.
+
+MAIN_SHOP_MALL:
+  display_name: Main Shop (Mall)
+  type: modal
+  parent: MAIN_SHOP
+  roi: { xmin: 0.46, xmax: 0.60, ymin: 0.00, ymax: 0.09 }
+  min_confidence: 0.85
+  description: Main Shop Mall container.
+
+MAIN_SHOP_MALL_HOT_SALE_PACKS:
+  display_name: Main Shop Mall (Hot Sale Packs)
+  type: sub_modal
+  templates: assets/state/main_shop_mall_hot_sale_packs/expected/
+  parent: [MAIN_SHOP_MALL, MAIN_SHOP]
+  roi: { xmin: 0.28, xmax: 0.60, ymin: 0.00, ymax: 0.19 }
+  min_confidence: 0.85
+  description: Main Shop Mall with Hot Sale Packs tab active.
+
+MAIN_SHOP_MALL_OFFICIAL_EVENT:
+  display_name: Main Shop Mall (Official Event)
+  type: sub_modal
+  templates: assets/state/main_shop_mall_official_event/expected/
+  parent: [MAIN_SHOP_MALL, MAIN_SHOP]
+  roi: { xmin: 0.36, xmax: 0.60, ymin: 0.00, ymax: 0.19 }
+  min_confidence: 0.85
+  description: Main Shop Mall with Official Event tab active.
+
+SEARCH:
+  display_name: Search Panel
+  type: modal
+  templates: assets/state/search/expected.png
+  parent: AREA
+  roi: { xmin: 0.05, xmax: 0.95, ymin: 0.20, ymax: 0.90 }
+  min_confidence: 0.90
+  description: Search panel for locating zombies, doom elites, or resource nodes on world map.
+
+SEARCH_SPECIAL:
+  display_name: Search Special Tab
+  type: sub_modal
+  templates: assets/state/search_special/expected.png
+  parent: SEARCH
+  roi: { xmin: 0.05, xmax: 0.95, ymin: 0.20, ymax: 0.90 }
+  min_confidence: 0.90
+  description: Special target search tab within search panel.
+
+RADAR_TASKS:
+  display_name: Radar Tasks
+  type: modal
+  templates: assets/state/radar_tasks/expected/
+  parent: RADAR_TASKS_BUTTON
+  roi: { xmin: 0.28, xmax: 0.54, ymin: 0.00, ymax: 0.09 }
+  min_confidence: 0.85
+  description: Radar mission list and rewards view opened via the radar tasks button.
+
+MAIL:
+  display_name: Mail
+  type: modal
+  parent: [BASE, AREA]
+  roi: { xmin: 0.89, xmax: 1.00, ymin: 0.71, ymax: 0.84 }
+  min_confidence: 0.75
+  description: In-game mailbox and battle reports window.
+
+ALLIANCE:
+  display_name: Alliance
+  type: modal
+  parent: ALLIANCE_BUTTON
+  roi: { xmin: 0.90, xmax: 1.00, ymin: 0.63, ymax: 0.78 }
+  min_confidence: 0.80
+  description: Alliance menu container.
+
+ALLIANCE_GIFTS_REGULAR:
+  display_name: Alliance Regular Gifts
+  type: sub_modal
+  templates: assets/state/alliance_gifts_regular/expected/
+  parent: ALLIANCE_GIFTS_BUTTON
+  roi: { xmin: 0.28, xmax: 0.50, ymin: 0.00, ymax: 0.33 }
+  min_confidence: 0.85
+  description: Alliance regular gifts claim view opened via the gifts button.
+
+ALLIANCE_GIFTS_PREMIUM:
+  display_name: Alliance Premium Gifts
+  type: sub_modal
+  templates: assets/state/alliance_gifts_premium/expected/
+  parent: ALLIANCE_GIFTS_PREMIUM_BUTTON
+  roi: { xmin: 0.28, xmax: 0.67, ymin: 0.00, ymax: 0.33 }
+  min_confidence: 0.85
+  description: Alliance premium/rare gifts claim view.
+
+LOOT:
+  display_name: Loot Modal
+  type: modal
+  templates: assets/state/loot/expected/
+  parent: LOOT_BUTTON
+  roi: { xmin: 0.42, xmax: 0.58, ymin: 0.11, ymax: 0.25 }
+  min_confidence: 0.80
+  description: Loot and reward collection modal overlay.
+
+INVENTORY_SPECIAL:
+  display_name: Inventory Special
+  type: sub_modal
+  templates: assets/state/inventory_special/expected/
+  parent: INVENTORY_BUTTON
+  roi: { xmin: 0.27, xmax: 0.46, ymin: 0.00, ymax: 0.19 }
+  min_confidence: 0.85
+  description: Special tab inside Inventory.
