@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use colored::Colorize;
+
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 use x11rb::rust_connection::RustConnection;
@@ -75,24 +77,34 @@ impl InputManager {
                     let mut prev_keymap: [u8; 32] = [0; 32];
                     let mut last_motion_trigger = Instant::now();
 
-                    let shortcuts_cfg = crate::core::load_shortcuts_from_config("config/states.yaml");
+                    let shortcuts_cfg = crate::core::load_shortcuts_from_config("config/shortcuts.yaml");
                     let mut triggers = Vec::new();
 
                     if let Some(trig) = parse_shortcut_trigger(&conn, "toggle_pause", &shortcuts_cfg.toggle_pause) {
+                        println!("[InputManager] Registered global shortcut: {} ➔ toggle_pause", shortcuts_cfg.toggle_pause);
                         triggers.push(trig);
                     }
                     if let Some(trig) = parse_shortcut_trigger(&conn, "open_config", &shortcuts_cfg.open_config) {
+                        println!("[InputManager] Registered global shortcut: {} ➔ open_config", shortcuts_cfg.open_config);
+                        triggers.push(trig);
+                    }
+                    if let Some(trig) = parse_shortcut_trigger(&conn, "quick_launcher", &shortcuts_cfg.quick_launcher) {
+                        println!("[InputManager] Registered global shortcut: {} ➔ quick_launcher", shortcuts_cfg.quick_launcher);
                         triggers.push(trig);
                     }
                     if let Some(trig) = parse_shortcut_trigger(&conn, "force_detect", &shortcuts_cfg.force_detect) {
+                        println!("[InputManager] Registered global shortcut: {} ➔ force_detect", shortcuts_cfg.force_detect);
                         triggers.push(trig);
                     }
                     if let Some(trig) = parse_shortcut_trigger(&conn, "show_help", &shortcuts_cfg.show_help) {
+                        println!("[InputManager] Registered global shortcut: {} ➔ show_help", shortcuts_cfg.show_help);
                         triggers.push(trig);
                     }
 
-                    // Dynamically register action shortcuts from config/states.yaml
-                    if let Ok(actions) = crate::core::load_actions_from_config("config/states.yaml") {
+                    // Dynamically register action shortcuts from config/actions.yaml
+                    let actions_res = crate::core::load_actions_from_config("config/actions.yaml")
+                        .or_else(|_| crate::core::load_actions_from_config("config/states.yaml"));
+                    if let Ok(actions) = actions_res {
                         for action in actions {
                             if let Some(ref spec) = action.shortcut {
                                 let trigger_id = format!("action:{}", action.name);
@@ -104,8 +116,10 @@ impl InputManager {
                         }
                     }
 
-                    // Dynamically register sequence shortcuts
-                    if let Ok(sequences) = crate::core::state::load_sequences_from_config("config/states.yaml") {
+                    // Dynamically register sequence shortcuts from config/sequences.yaml
+                    let sequences_res = crate::core::state::load_sequences_from_config("config/sequences.yaml")
+                        .or_else(|_| crate::core::state::load_sequences_from_config("config/states.yaml"));
+                    if let Ok(sequences) = sequences_res {
                         for seq in sequences {
                             if let Some(ref spec) = seq.shortcut {
                                 let trigger_id = format!("sequence:{}", seq.name);
@@ -117,6 +131,20 @@ impl InputManager {
                         }
                     }
 
+                    // Dynamically resolve modifier keycodes from X11 keymap
+                    let mut ctrl_keycodes = find_all_keycodes_for_keysym(&conn, 0xffe3); // Control_L
+                    ctrl_keycodes.extend(find_all_keycodes_for_keysym(&conn, 0xffe4)); // Control_R
+                    if ctrl_keycodes.is_empty() { ctrl_keycodes = vec![37, 105]; }
+
+                    let mut shift_keycodes = find_all_keycodes_for_keysym(&conn, 0xffe1); // Shift_L
+                    shift_keycodes.extend(find_all_keycodes_for_keysym(&conn, 0xffe2)); // Shift_R
+                    if shift_keycodes.is_empty() { shift_keycodes = vec![50, 62]; }
+
+                    let mut alt_keycodes = find_all_keycodes_for_keysym(&conn, 0xffe9); // Alt_L
+                    alt_keycodes.extend(find_all_keycodes_for_keysym(&conn, 0xffea)); // Alt_R
+                    alt_keycodes.extend(find_all_keycodes_for_keysym(&conn, 0xfe03)); // ISO_Level3_Shift (AltGr)
+                    if alt_keycodes.is_empty() { alt_keycodes = vec![64, 108]; }
+
                     // Initial keymap state
                     if let Ok(cookie) = conn.query_keymap() {
                         if let Ok(reply) = cookie.reply() {
@@ -127,9 +155,8 @@ impl InputManager {
                     while running_clone.load(Ordering::Relaxed) {
                         let win = wt_clone.get_window_info();
                         let is_focused = is_game_focused(&conn, root, &win);
-                        let mut mask_u16: u16 = 0;
-
                         // 1. Check Mouse / Pointer Events (movement, clicks, scroll)
+                        let mut mask_u16: u16 = 0;
                         if let Ok(cookie) = conn.query_pointer(root) {
                             if let Ok(reply) = cookie.reply() {
                                 mask_u16 = u16::from(reply.mask);
@@ -161,32 +188,46 @@ impl InputManager {
                             }
                         }
 
-                        // 2. Check Keyboard Events & Dynamic Hotkeys (only active when game window has focus)
+                        // 2. Check Keyboard Events & Dynamic Hotkeys
                         if let Ok(cookie) = conn.query_keymap() {
                             if let Ok(reply) = cookie.reply() {
                                 let keys = reply.keys;
 
-                                let ctrl_active = is_key_down(&keys, 37)
-                                    || is_key_down(&keys, 105)
-                                    || (mask_u16 & 0x0004) != 0;
-                                let alt_active = is_key_down(&keys, 64)
-                                    || is_key_down(&keys, 108)
-                                    || (mask_u16 & 0x0008) != 0;
-                                let shift_active = is_key_down(&keys, 50)
-                                    || is_key_down(&keys, 62)
-                                    || (mask_u16 & 0x0001) != 0;
+                                // Only use physical key state from query_keymap (reliable).
+                                // Do NOT use pointer mask bits — they include Num Lock, Caps Lock,
+                                // AltGr and other modifiers that cause false positives/negatives.
+                                let ctrl_active = ctrl_keycodes.iter().any(|&kc| is_key_down(&keys, kc));
+                                let alt_active = alt_keycodes.iter().any(|&kc| is_key_down(&keys, kc));
+                                let shift_active = shift_keycodes.iter().any(|&kc| is_key_down(&keys, kc));
 
                                 for trigger in triggers.iter_mut() {
                                     let key_pressed = is_key_down(&keys, trigger.keycode);
-                                    let ctrl_matches = !trigger.require_ctrl || ctrl_active;
-                                    let alt_matches = !trigger.require_alt || alt_active;
-                                    let shift_matches = !trigger.require_shift || shift_active;
+                                    // Permissive: only check that REQUIRED modifiers are pressed.
+                                    // Don't block if an extra modifier happens to be held.
+                                    let ctrl_ok = !trigger.require_ctrl || ctrl_active;
+                                    let alt_ok = !trigger.require_alt || alt_active;
+                                    let shift_ok = !trigger.require_shift || shift_active;
+                                    // But prevent ctrl+x from also matching bare "x":
+                                    // if the trigger has NO modifier requirement at all, skip when any modifier is pressed.
+                                    let has_any_modifier_req = trigger.require_ctrl || trigger.require_alt || trigger.require_shift;
+                                    let no_unwanted_modifier = has_any_modifier_req
+                                        || (!ctrl_active && !alt_active && !shift_active);
 
-                                    let fully_pressed = key_pressed && ctrl_matches && alt_matches && shift_matches;
+                                    let fully_pressed = key_pressed && ctrl_ok && alt_ok && shift_ok && no_unwanted_modifier;
 
                                     if fully_pressed && !trigger.prev_pressed {
+                                        println!(
+                                            "{}",
+                                            format!("\n⚡ [HOTKEY] '{}' triggered! (keycode: {})", trigger.id, trigger.keycode)
+                                                .bright_magenta()
+                                                .bold()
+                                        );
                                         if let Some(ref cb) = on_hotkey {
-                                            cb(&trigger.id);
+                                            let cb_clone = cb.clone();
+                                            let trigger_id = trigger.id.clone();
+                                            thread::spawn(move || {
+                                                cb_clone(&trigger_id);
+                                            });
                                         }
                                     }
                                     trigger.prev_pressed = fully_pressed;
@@ -472,21 +513,7 @@ impl<'a> InputGrabGuard<'a> {
             false
         };
 
-        let grabbed_keyboard = if let Ok(cookie) = conn.grab_keyboard(
-            false,
-            grab_win,
-            x11rb::CURRENT_TIME,
-            GrabMode::ASYNC,
-            GrabMode::ASYNC,
-        ) {
-            if let Ok(reply) = cookie.reply() {
-                reply.status == GrabStatus::SUCCESS
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        let grabbed_keyboard = false;
 
         let _ = conn.flush();
         Self { conn, grabbed_pointer, grabbed_keyboard }
@@ -793,6 +820,11 @@ fn is_key_down(keys: &[u8; 32], keycode: u8) -> bool {
 }
 
 fn find_keycode_for_keysym(conn: &RustConnection, target_keysym: u32) -> Option<u8> {
+    find_all_keycodes_for_keysym(conn, target_keysym).into_iter().next()
+}
+
+fn find_all_keycodes_for_keysym(conn: &RustConnection, target_keysym: u32) -> Vec<u8> {
+    let mut keycodes = Vec::new();
     let setup = conn.setup();
     let min_keycode = setup.min_keycode;
     let max_keycode = setup.max_keycode;
@@ -805,14 +837,15 @@ fn find_keycode_for_keysym(conn: &RustConnection, target_keysym: u32) -> Option<
                 for (idx, chunk) in reply.keysyms.chunks(per_key).enumerate() {
                     for &sym in chunk {
                         if sym == target_keysym {
-                            return Some(min_keycode + idx as u8);
+                            keycodes.push(min_keycode + idx as u8);
+                            break;
                         }
                     }
                 }
             }
         }
     }
-    None
+    keycodes
 }
 
 /// Checks in real-time if the game window currently possesses active input focus.
@@ -932,7 +965,7 @@ pub fn parse_shortcut_trigger(conn: &RustConnection, id: &str, spec: &str) -> Op
         match part.as_str() {
             "ctrl" | "control" => require_ctrl = true,
             "alt" => require_alt = true,
-            "shift" => require_shift = true,
+            "shift" | "maj" => require_shift = true,
             k => key_part = k,
         }
     }

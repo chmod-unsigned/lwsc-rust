@@ -401,6 +401,8 @@ pub struct ShortcutsConfig {
     pub toggle_pause: String,
     #[serde(default = "default_open_config")]
     pub open_config: String,
+    #[serde(default = "default_quick_launcher")]
+    pub quick_launcher: String,
     #[serde(default = "default_force_detect")]
     pub force_detect: String,
     #[serde(default = "default_show_help")]
@@ -412,6 +414,9 @@ fn default_toggle_pause() -> String {
 }
 fn default_open_config() -> String {
     "ctrl+o".to_string()
+}
+fn default_quick_launcher() -> String {
+    "ctrl+x".to_string()
 }
 fn default_force_detect() -> String {
     "ctrl+s".to_string()
@@ -425,6 +430,7 @@ impl Default for ShortcutsConfig {
         Self {
             toggle_pause: default_toggle_pause(),
             open_config: default_open_config(),
+            quick_launcher: default_quick_launcher(),
             force_detect: default_force_detect(),
             show_help: default_show_help(),
         }
@@ -492,8 +498,8 @@ pub fn get_button_definition(id: &str) -> Option<crate::core::button::ButtonDefi
 pub fn load_shortcuts_from_config<P: AsRef<Path>>(path: P) -> ShortcutsConfig {
     let p = path.as_ref();
     let candidates = [
-        p.to_path_buf(),
         Path::new("config/shortcuts.yaml").to_path_buf(),
+        p.to_path_buf(),
         Path::new("config/states.yaml").to_path_buf(),
     ];
 

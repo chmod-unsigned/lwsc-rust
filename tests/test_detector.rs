@@ -163,3 +163,41 @@ fn test_detector_matches_main_shop_mall_states() {
         assert!(res.confidence >= 0.85);
     }
 }
+
+#[test]
+fn test_find_all_matches_multiple_occurrences() {
+    let mut matcher = lwsc2::vision::matching::TemplateMatcher::new(".");
+    let template_path = "poi/gold_mine.png";
+    if !std::path::Path::new(template_path).exists() {
+        return;
+    }
+
+    let tmpl = match image::open(template_path) {
+        Ok(img) => img.to_rgba8(),
+        Err(_) => return,
+    };
+    let (tw, th) = tmpl.dimensions();
+
+    let mut screen = RgbaImage::from_pixel(800, 800, Rgba([30, 40, 50, 255]));
+
+    // Place 3 instances of gold mine at distinct locations
+    let positions = vec![(100, 100), (300, 400), (550, 200)];
+    for &(px, py) in &positions {
+        for y in 0..th {
+            for x in 0..tw {
+                let p = tmpl.get_pixel(x, y);
+                screen.put_pixel(px + x, py + y, *p);
+            }
+        }
+    }
+
+    let start = std::time::Instant::now();
+    let matches = matcher.find_all_matches(&screen, template_path, 0.85, None, None);
+    let elapsed = start.elapsed();
+    println!("find_all_matches found {} occurrences in {:?}", matches.len(), elapsed);
+
+    assert_eq!(matches.len(), 3);
+    for m in &matches {
+        assert!(m.confidence >= 0.99);
+    }
+}

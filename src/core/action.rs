@@ -505,6 +505,8 @@ pub struct SequenceDefinitionEntry {
     pub description: Option<String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default, alias = "loop")]
+    pub repeat: bool,
     #[serde(default)]
     pub shortcut: Option<String>,
     #[serde(default)]
@@ -541,6 +543,7 @@ pub fn parse_sequences_from_str(content: &str) -> Result<Vec<SequenceDefinition>
                     name,
                     description,
                     enabled: entry.enabled,
+                    repeat: entry.repeat,
                     shortcut: entry.shortcut,
                     schedules: entry.schedules,
                     steps: entry.steps,
@@ -558,6 +561,8 @@ pub struct SequenceDefinition {
     pub description: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default, alias = "loop")]
+    pub repeat: bool,
     #[serde(default)]
     pub shortcut: Option<String>,
     #[serde(default)]
@@ -587,7 +592,7 @@ use std::collections::{HashMap, VecDeque};
 use chrono::{Local, Datelike, Timelike};
 
 pub struct ActionManager {
-    actions: RwLock<Vec<ActionDefinition>>,
+    pub actions: RwLock<Vec<ActionDefinition>>,
     sequences: RwLock<Vec<SequenceDefinition>>,
     active_sequence: RwLock<Option<ActiveSequenceState>>,
     sequence_queue: RwLock<VecDeque<String>>,
@@ -740,18 +745,36 @@ impl ActionManager {
         screen: &RgbaImage,
         matcher: &mut TemplateMatcher,
         bypass_cooldown: bool,
+        bypass_state_check: bool,
     ) -> Option<ActionExecutionResult> {
         let (img_w, img_h) = screen.dimensions();
         let mut list = self.actions.write().unwrap();
         let action = list.iter_mut().find(|a| a.name.eq_ignore_ascii_case(name))?;
 
         // 1. Check state condition if specified, and parent states
-        if let Some(req_state) = action.state {
-            if req_state != current_state {
+        //    (skipped for sequence steps — user manually triggered them)
+        if !bypass_state_check {
+            if let Some(req_state) = action.state {
+                if req_state != current_state {
+                    return Some(ActionExecutionResult {
+                        action_name: action.name.clone(),
+                        executed: false,
+                        reason: format!("Current state {:?} does not match required state {:?}", current_state, req_state),
+                        click_coords: None,
+                        drag_coords: None,
+                        drag_duration_ms: action.drag_duration_ms,
+                        sweep_templates: Vec::new(),
+                        script: None,
+                        script_args: Vec::new(),
+                        save_cursor: action.save_cursor,
+                    });
+                }
+            }
+            if !action.parent_states.is_empty() && !action.parent_states.contains(&current_state) {
                 return Some(ActionExecutionResult {
                     action_name: action.name.clone(),
                     executed: false,
-                    reason: format!("Current state {:?} does not match required state {:?}", current_state, req_state),
+                    reason: format!("Current state {:?} is not in parent_states {:?}", current_state, action.parent_states),
                     click_coords: None,
                     drag_coords: None,
                     drag_duration_ms: action.drag_duration_ms,
@@ -761,20 +784,6 @@ impl ActionManager {
                     save_cursor: action.save_cursor,
                 });
             }
-        }
-        if !action.parent_states.is_empty() && !action.parent_states.contains(&current_state) {
-            return Some(ActionExecutionResult {
-                action_name: action.name.clone(),
-                executed: false,
-                reason: format!("Current state {:?} is not in parent_states {:?}", current_state, action.parent_states),
-                click_coords: None,
-                drag_coords: None,
-                drag_duration_ms: action.drag_duration_ms,
-                sweep_templates: Vec::new(),
-                script: None,
-                script_args: Vec::new(),
-                save_cursor: action.save_cursor,
-            });
         }
 
         // 2. Check cooldown if not bypassed
@@ -1125,6 +1134,12 @@ impl ActionManager {
                 new_state.current_step_index += 1;
                 new_state.step_start_time = std::time::Instant::now();
                 *active_lock = Some(new_state);
+            } else if seq.repeat {
+                println!("[Sequence] Sequence '{}' step timed out on last step. Looping back to step 0...", seq.name);
+                let mut new_state = active_state.clone();
+                new_state.current_step_index = 0;
+                new_state.step_start_time = std::time::Instant::now();
+                *active_lock = Some(new_state);
             } else {
                 println!("[Sequence] Sequence '{}' finished (last step timed out).", seq.name);
                 *active_lock = None;
@@ -1132,13 +1147,19 @@ impl ActionManager {
             return None;
         }
 
-        let res = self.execute_single_action(&step.action, current_state, screen, matcher, true);
+        let res = self.execute_single_action(&step.action, current_state, screen, matcher, true, true);
         if let Some(ref r) = res {
             if r.executed {
                 println!("[Sequence] Executed step {} '{}' of '{}'.", active_state.current_step_index, step.action, seq.name);
                 if active_state.current_step_index + 1 < seq.steps.len() {
                     let mut new_state = active_state.clone();
                     new_state.current_step_index += 1;
+                    new_state.step_start_time = std::time::Instant::now();
+                    *active_lock = Some(new_state);
+                } else if seq.repeat {
+                    println!("[Sequence] Sequence '{}' completed iteration. Looping back to step 0...", seq.name);
+                    let mut new_state = active_state.clone();
+                    new_state.current_step_index = 0;
                     new_state.step_start_time = std::time::Instant::now();
                     *active_lock = Some(new_state);
                 } else {

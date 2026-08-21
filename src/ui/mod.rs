@@ -3,3 +3,4 @@
 pub mod config_window;
 
 pub use config_window::ConfigWindow;
+pub use config_window::ConfigWindow as QuickLauncherWindow;

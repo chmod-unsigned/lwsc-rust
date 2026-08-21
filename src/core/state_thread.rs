@@ -63,9 +63,9 @@ impl StateDetectorThread {
                 let capturer = ScreenCapturer::new();
                 let mut detector = StateDetector::new(&asset_root_str);
 
-                // Initial detection pass (only if window is found and focused)
+                // Initial detection pass (as long as window is found)
                 let initial_info = window_tracker.get_window_info();
-                if initial_info.is_found && initial_info.is_focused {
+                if initial_info.is_found {
                     let last_root = *current_root_state_th.read().unwrap();
                     let initial_res = perform_detection(
                         &window_tracker,
@@ -84,7 +84,13 @@ impl StateDetectorThread {
                 }
 
                 while running_th.load(Ordering::Relaxed) {
-                    let req = match req_rx.recv_timeout(periodic_interval) {
+                    let loop_timeout = if am_th.as_ref().map(|a| a.has_active_sequence()).unwrap_or(false) {
+                        Duration::from_millis(150)
+                    } else {
+                        periodic_interval
+                    };
+
+                    let req = match req_rx.recv_timeout(loop_timeout) {
                         Ok(r) => r,
                         Err(mpsc::RecvTimeoutError::Timeout) => DetectionRequest::Periodic,
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -111,7 +117,7 @@ impl StateDetectorThread {
                     }
 
                     let win_info = window_tracker.get_window_info();
-                    if !win_info.is_found || !win_info.is_focused {
+                    if !win_info.is_found {
                         if let Some(tx) = resp_tx {
                             let dummy = DetectionResult {
                                 state: GameState::Unknown,
@@ -123,11 +129,7 @@ impl StateDetectorThread {
                                 matched_template: None,
                                 match_box: None,
                                 match_center: None,
-                                display_name: if !win_info.is_found {
-                                    "Game Window Not Found".to_string()
-                                } else {
-                                    "Game Window Not Focused".to_string()
-                                },
+                                display_name: "Game Window Not Found".to_string(),
                             };
                             let _ = tx.send(dummy);
                         }
@@ -281,21 +283,6 @@ fn perform_detection(
         };
     }
 
-    if !win.is_focused {
-        return DetectionResult {
-            state: GameState::Unknown,
-            state_type: crate::core::state::StateType::Special,
-            root_state: None,
-            modal_state: None,
-            visible_buttons: Vec::new(),
-            confidence: 0.0,
-            matched_template: None,
-            match_box: None,
-            match_center: None,
-            display_name: "Game Window Not Focused".to_string(),
-        };
-    }
-
     let frame = match capturer.capture_region(win.x, win.y, win.width, win.height) {
         Some(f) => f,
         None => {
@@ -325,12 +312,15 @@ fn perform_detection(
     } else if let Some(am) = action_manager {
         let mut action_results = Vec::new();
         if am.has_active_sequence() {
+            // Always advance manually-triggered sequences, even if game is not focused.
             if let Some(r) = am.evaluate_sequence(res.state, &frame, &mut detector.matcher) {
                 action_results.push(r);
             }
-        } else {
-            // Evaluate and execute any active automated actions (e.g. alliance_help, gift claims)
+        } else if win.is_focused {
+            // Only run auto-evaluated actions when game has focus.
             action_results = am.evaluate(res.state, &frame, &mut detector.matcher);
+        } else {
+            res.display_name = format!("{} [PAUSED - Background]", res.display_name);
         }
 
         for action_res in action_results {

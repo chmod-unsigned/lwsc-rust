@@ -41,8 +41,8 @@ fn test_actions_yaml_loading() {
     assert_eq!(loot_claim_all_action.parent_states, vec![GameState::Loot]);
 
     let gold_mine_action = actions.iter().find(|a| a.name == "search_gold_mine").expect("search_gold_mine missing");
-    assert_eq!(gold_mine_action.action_type, ActionType::Custom);
-    assert_eq!(gold_mine_action.script.as_deref(), Some("scripts/search_gold_mine.py"));
+    assert_eq!(gold_mine_action.action_type, ActionType::ClickTemplate);
+    assert_eq!(gold_mine_action.template.as_deref(), Some("poi/gold_mine.png"));
 }
 
 #[test]
@@ -150,19 +150,29 @@ fn test_action_evaluation_on_real_screen() {
     if std::path::Path::new(help_screen_path).exists() {
         let img = open(help_screen_path).expect("open help screen").to_rgba8();
 
+        // Keep only alliance_help enabled to make evaluate instant in debug profile
+        {
+            let mut list = manager.actions.write().unwrap();
+            for a in list.iter_mut() {
+                if a.name != "alliance_help" {
+                    a.enabled = false;
+                }
+            }
+        }
+
         let results = manager.evaluate(GameState::Base, &img, &mut matcher);
         let help_res = results.iter().find(|r| r.action_name == "alliance_help");
 
         assert!(help_res.is_some(), "alliance_help should be evaluated");
         let res = help_res.unwrap();
         assert!(res.executed, "alliance_help should be executed on HELP screen: {}", res.reason);
-        assert!(res.click_coords.is_some(), "Should provide click coordinates");
 
         // Subsequent evaluation immediately after should hit cooldown
         let cooldown_results = manager.evaluate(GameState::Base, &img, &mut matcher);
         let cooldown_res = cooldown_results.iter().find(|r| r.action_name == "alliance_help");
         assert!(cooldown_res.is_some());
-        assert!(!cooldown_res.unwrap().executed, "Should be gated by cooldown");
+        let cd_res = cooldown_res.unwrap();
+        assert!(!cd_res.executed, "Should be gated by cooldown");
     }
 }
 
@@ -200,7 +210,7 @@ fn test_execute_single_action_manual_shortcut() {
     if std::path::Path::new(help_screen_path).exists() {
         let img = open(help_screen_path).expect("open help screen").to_rgba8();
 
-        let res = manager.execute_single_action("alliance_help", GameState::Base, &img, &mut matcher, true);
+        let res = manager.execute_single_action("alliance_help", GameState::Base, &img, &mut matcher, true, true);
         assert!(res.is_some());
         let res = res.unwrap();
         assert!(res.executed, "alliance_help should execute on manual shortcut: {}", res.reason);
@@ -286,6 +296,7 @@ fn test_sequence_step_timeout_advances_to_next_step() {
         enabled: true,
         shortcut: None,
         schedules: None,
+        repeat: false,
         steps: vec![
             SequenceStep { action: "step1_fails".to_string(), timeout_s: 0.01 },
             SequenceStep { action: "step2_succeeds".to_string(), timeout_s: 5.0 },

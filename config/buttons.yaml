@@ -50,7 +50,7 @@ RADAR_TASKS_BUTTON:
   display_name: Radar Tasks Button
   parent_states: [BASE, AREA]
   target_state: RADAR_TASKS
-  roi: { xmin: 0.55, xmax: 0.68, ymin: 0.44, ymax: 0.56 }
+  roi: { xmin: 0.00, xmax: 0.09, ymin: 0.66, ymax: 0.78 }
   min_confidence: 0.70
   description: Radar tasks prompt button appearing on Base and Area screens.
 

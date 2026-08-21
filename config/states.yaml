@@ -96,7 +96,7 @@ MAIL:
   display_name: Mail
   type: modal
   parent: [BASE, AREA]
-  roi: { xmin: 0.89, xmax: 1.00, ymin: 0.71, ymax: 0.85 }
+  roi: { xmin: 0.89, xmax: 1.00, ymin: 0.71, ymax: 0.84 }
   min_confidence: 0.75
   description: In-game mailbox and battle reports window.
 

@@ -2,7 +2,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::thread;
+use std::time::Duration;
 
 use eframe::egui;
 
@@ -12,76 +13,89 @@ use crate::core::state_thread::StateDetectorThread;
 use crate::vision::window_tracker::WindowTracker;
 
 static IS_EVENT_LOOP_RUNNING: AtomicBool = AtomicBool::new(false);
-static TOGGLE_VISIBILITY: AtomicBool = AtomicBool::new(false);
+static SHOW_FULL_CONFIG_REQUEST: AtomicBool = AtomicBool::new(false);
+static SHOW_QUICK_LAUNCHER_REQUEST: AtomicBool = AtomicBool::new(false);
+static EGUI_CTX: std::sync::RwLock<Option<egui::Context>> = std::sync::RwLock::new(None);
+
+#[derive(PartialEq, Clone, Copy)]
+pub enum WindowMode {
+    FullConfig,
+    QuickLauncher,
+}
 
 pub struct ConfigWindow;
 
 impl ConfigWindow {
-    /// Opens the configuration window in a background thread if not already open.
+    /// Opens or toggles the full configuration window (Ctrl+O).
     pub fn open_or_toggle(
+        _action_manager: Arc<ActionManager>,
+        _state_thread: StateDetectorThread,
+        _window_tracker: WindowTracker,
+    ) {
+        SHOW_FULL_CONFIG_REQUEST.store(true, Ordering::SeqCst);
+        if let Ok(guard) = EGUI_CTX.read() {
+            if let Some(ref ctx) = *guard {
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    /// Opens or toggles the mini Quick Launcher window (Ctrl+X).
+    pub fn open_quick_launcher(
+        _action_manager: Arc<ActionManager>,
+        _state_thread: StateDetectorThread,
+        _window_tracker: WindowTracker,
+    ) {
+        SHOW_QUICK_LAUNCHER_REQUEST.store(true, Ordering::SeqCst);
+        if let Ok(guard) = EGUI_CTX.read() {
+            if let Some(ref ctx) = *guard {
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    /// Initializes and runs the native eframe event loop on the main thread.
+    /// The window is created hidden initially and toggled visible on hotkey triggers.
+    pub fn run_on_main_thread(
         action_manager: Arc<ActionManager>,
         state_thread: StateDetectorThread,
         window_tracker: WindowTracker,
-    ) -> Option<JoinHandle<()>> {
-        if IS_EVENT_LOOP_RUNNING.load(Ordering::SeqCst) {
-            TOGGLE_VISIBILITY.store(true, Ordering::SeqCst);
-            return None;
-        }
+    ) {
         IS_EVENT_LOOP_RUNNING.store(true, Ordering::SeqCst);
 
-        let handle = thread::Builder::new()
-            .name("EguiConfigWindowThread".to_string())
-            .spawn(move || {
-                struct WindowGuard;
-                impl Drop for WindowGuard {
-                    fn drop(&mut self) {
-                        IS_EVENT_LOOP_RUNNING.store(false, Ordering::SeqCst);
-                    }
-                }
-                let _guard = WindowGuard;
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([760.0, 580.0])
+                .with_always_on_top()
+                .with_visible(false) // Start invisible/hidden
+                .with_title("LWSC2 - Configuration & Action Manager (Ctrl+O)"),
+            ..Default::default()
+        };
 
-                let mut options = eframe::NativeOptions {
-                    viewport: egui::ViewportBuilder::default()
-                        .with_inner_size([760.0, 580.0])
-                        .with_title("LWSC2 - Configuration & Action Manager"),
-                    ..Default::default()
-                };
+        let result = eframe::run_native(
+            "LWSC2 Manager",
+            options,
+            Box::new(move |cc| {
+                let mut visuals = eframe::egui::Visuals::dark();
+                visuals.window_rounding = 8.0.into();
+                visuals.menu_rounding = 8.0.into();
+                visuals.widgets.noninteractive.rounding = 4.0.into();
+                visuals.widgets.inactive.rounding = 4.0.into();
+                visuals.widgets.hovered.rounding = 4.0.into();
+                visuals.widgets.active.rounding = 4.0.into();
 
-                #[cfg(target_os = "linux")]
-                {
-                    options.event_loop_builder = Some(Box::new(|builder| {
-                        use winit::platform::x11::EventLoopBuilderExtX11;
-                        use winit::platform::wayland::EventLoopBuilderExtWayland;
-                        EventLoopBuilderExtX11::with_any_thread(builder, true);
-                        EventLoopBuilderExtWayland::with_any_thread(builder, true);
-                    }));
-                }
+                visuals.window_fill = eframe::egui::Color32::from_rgb(26, 28, 34);
+                visuals.panel_fill = eframe::egui::Color32::from_rgb(26, 28, 34);
 
-                let result = eframe::run_native(
-                    "LWSC2 Configuration",
-                    options,
-                    Box::new(|cc| {
-                        let mut visuals = eframe::egui::Visuals::light();
-                        visuals.window_rounding = 8.0.into();
-                        visuals.menu_rounding = 8.0.into();
-                        visuals.widgets.noninteractive.rounding = 4.0.into();
-                        visuals.widgets.inactive.rounding = 4.0.into();
-                        visuals.widgets.hovered.rounding = 4.0.into();
-                        visuals.widgets.active.rounding = 4.0.into();
-                        
-                        visuals.window_fill = eframe::egui::Color32::from_rgb(245, 245, 245);
-                        visuals.panel_fill = eframe::egui::Color32::from_rgb(245, 245, 245);
-                        
-                        cc.egui_ctx.set_visuals(visuals);
-                        
-                        Box::new(Lwsc2ConfigApp::new(action_manager, state_thread, window_tracker))
-                    }),
-                );
-                println!("[ConfigWindow] eframe::run_native finished with result: {:?}", result);
-            })
-            .ok();
+                cc.egui_ctx.set_visuals(visuals);
 
-        handle
+                let mut app = Lwsc2ConfigApp::new(action_manager, state_thread, window_tracker, WindowMode::FullConfig);
+                app.is_visible = false; // Hidden initially
+                Box::new(app)
+            }),
+        );
+        println!("[UI] eframe::run_native finished on main thread: {:?}", result);
+        IS_EVENT_LOOP_RUNNING.store(false, Ordering::SeqCst);
     }
 
     pub fn is_open() -> bool {
@@ -103,11 +117,14 @@ struct Lwsc2ConfigApp {
     window_tracker: WindowTracker,
     notification_msg: String,
     notification_expire: std::time::Instant,
+    mode: WindowMode,
     current_tab: ConfigTab,
     is_visible: bool,
     sequences: Vec<SequenceDefinition>,
     actions: Vec<crate::core::action::ActionDefinition>,
     shortcuts: ShortcutsConfig,
+    selected_action_idx: usize,
+    selected_seq_idx: usize,
 }
 
 impl Lwsc2ConfigApp {
@@ -115,6 +132,7 @@ impl Lwsc2ConfigApp {
         action_manager: Arc<ActionManager>,
         state_thread: StateDetectorThread,
         window_tracker: WindowTracker,
+        initial_mode: WindowMode,
     ) -> Self {
         let sequences = action_manager.list_sequences();
         let actions = action_manager.list_actions();
@@ -125,11 +143,14 @@ impl Lwsc2ConfigApp {
             window_tracker,
             notification_msg: String::new(),
             notification_expire: std::time::Instant::now(),
+            mode: initial_mode,
             current_tab: ConfigTab::Dashboard,
             is_visible: true,
             sequences,
             actions,
             shortcuts,
+            selected_action_idx: 0,
+            selected_seq_idx: 0,
         }
     }
 
@@ -137,24 +158,455 @@ impl Lwsc2ConfigApp {
         self.notification_msg = msg.into();
         self.notification_expire = std::time::Instant::now() + std::time::Duration::from_secs(3);
     }
+
+}
+
+fn execute_action_worker(
+    action_manager: &Arc<ActionManager>,
+    state_thread: &StateDetectorThread,
+    window_tracker: &WindowTracker,
+    action_name: &str,
+) {
+    use colored::Colorize;
+    let win = window_tracker.get_window_info();
+    if !win.is_found {
+        println!("{}", "[Quick Launcher] Error: Game window not found".red());
+        return;
+    }
+
+    let capturer = crate::vision::ScreenCapturer::new();
+    if let Some(frame) = capturer.capture_roi(win.x, win.y, win.width, win.height) {
+        let current_state = state_thread.get_current_state();
+        let mut matcher = crate::vision::matching::TemplateMatcher::new(".");
+        if let Some(action_res) = action_manager.execute_single_action(
+            action_name,
+            current_state,
+            &frame,
+            &mut matcher,
+            true, // bypass cooldown on manual trigger
+            true, // bypass state check on manual trigger
+        ) {
+            if action_res.executed {
+                if let Some((cx, cy)) = action_res.click_coords {
+                    let screen_x = win.x + cx;
+                    let screen_y = win.y + cy;
+                    println!(
+                        "{}",
+                        format!(
+                            "[Quick Launcher] Action '{}' executed -> Clicking at ({}, {})",
+                            action_name, screen_x, screen_y
+                        ).green().bold()
+                    );
+                    crate::io::input::send_x11_click_ex(
+                        win.window_id,
+                        screen_x as i16,
+                        screen_y as i16,
+                        action_res.save_cursor,
+                    );
+                    state_thread.trigger_on_activity(
+                        "quick_launcher_click",
+                        std::time::Duration::from_millis(150),
+                        false,
+                    );
+                } else if let Some(((sx, sy), (ex, ey))) = action_res.drag_coords {
+                    let screen_sx = win.x + sx;
+                    let screen_sy = win.y + sy;
+                    let screen_ex = win.x + ex;
+                    let screen_ey = win.y + ey;
+                    println!(
+                        "{}",
+                        format!(
+                            "[Quick Launcher] Action '{}' executed -> Dragging from ({}, {}) to ({}, {})",
+                            action_name, screen_sx, screen_sy, screen_ex, screen_ey
+                        ).green().bold()
+                    );
+                    crate::io::input::send_x11_drag(
+                        win.window_id,
+                        screen_sx as i16,
+                        screen_sy as i16,
+                        screen_ex as i16,
+                        screen_ey as i16,
+                        action_res.drag_duration_ms,
+                        action_res.save_cursor,
+                        None,
+                    );
+                    state_thread.trigger_on_activity(
+                        "quick_launcher_drag",
+                        std::time::Duration::from_millis(150),
+                        false,
+                    );
+                } else if let Some(ref script_path) = action_res.script {
+                    let screenshot_file = "last_screenshot.png";
+                    let _ = frame.save(screenshot_file);
+                    let win_id = win.window_id;
+                    let state_str = current_state.to_string();
+                    let script = script_path.clone();
+                    let args = action_res.script_args.clone();
+                    thread::spawn(move || {
+                        crate::core::action::run_python_script(
+                            &script,
+                            &args,
+                            win_id,
+                            Some(&state_str),
+                            Some(screenshot_file),
+                        );
+                    });
+                }
+            } else {
+                println!(
+                    "{}",
+                    format!("[Quick Launcher] Action '{}' skipped: {}", action_name, action_res.reason).yellow()
+                );
+            }
+        }
+    }
+}
+
+fn execute_sequence_worker(
+    action_manager: &Arc<ActionManager>,
+    state_thread: &StateDetectorThread,
+    seq_name: &str,
+) {
+    use colored::Colorize;
+    if action_manager.trigger_sequence(seq_name) {
+        println!("{}", format!("[Quick Launcher] Sequence '{}' started.", seq_name).green().bold());
+        state_thread.trigger_on_activity(
+            "quick_launcher_seq",
+            std::time::Duration::from_millis(50),
+            false,
+        );
+    } else {
+        println!("{}", format!("[Quick Launcher] Failed to start sequence '{}' (not found or already active).", seq_name).red());
+    }
 }
 
 impl eframe::App for Lwsc2ConfigApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.request_repaint();
+        // Store context EVERY frame so request_repaint() from other threads always
+        // uses the latest event loop proxy (it changes after minimize/restore cycles).
+        if let Ok(mut guard) = EGUI_CTX.write() {
+            *guard = Some(ctx.clone());
+        }
+        // Keep the event loop alive with a slow repaint cadence even when hidden,
+        // so that SHOW_*_REQUEST flags get picked up without ctx.request_repaint()
+        // from another thread needing to pierce epoll_wait.
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
 
-        if TOGGLE_VISIBILITY.load(Ordering::SeqCst) {
-            self.is_visible = !self.is_visible;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.is_visible));
-            TOGGLE_VISIBILITY.store(false, Ordering::SeqCst);
+        if SHOW_FULL_CONFIG_REQUEST.swap(false, Ordering::SeqCst) {
+            if self.is_visible && self.mode == WindowMode::FullConfig {
+                self.is_visible = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            } else {
+                self.mode = WindowMode::FullConfig;
+                self.is_visible = true;
+                self.actions = self.action_manager.list_actions();
+                self.sequences = self.action_manager.list_sequences();
+                self.shortcuts = load_shortcuts_from_config("config/shortcuts.yaml");
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(760.0, 580.0)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title("LWSC2 - Configuration & Action Manager (Ctrl+O)".to_string()));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                thread::spawn(|| {
+                    thread::sleep(Duration::from_millis(50));
+                    raise_x11_window_to_top("LWSC2");
+                });
+            }
+        }
+
+        if SHOW_QUICK_LAUNCHER_REQUEST.swap(false, Ordering::SeqCst) {
+            if self.is_visible && self.mode == WindowMode::QuickLauncher {
+                self.is_visible = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            } else {
+                self.mode = WindowMode::QuickLauncher;
+                self.is_visible = true;
+                self.actions = self.action_manager.list_actions();
+                self.sequences = self.action_manager.list_sequences();
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(480.0, 160.0)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title("LWSC2 - Quick Launcher (Ctrl+X)".to_string()));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                thread::spawn(|| {
+                    thread::sleep(Duration::from_millis(50));
+                    raise_x11_window_to_top("LWSC2");
+                });
+            }
         }
 
         if ctx.input(|i| i.viewport().close_requested()) || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.is_visible = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
 
+        if !self.is_visible {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            return;
+        }
+
+        match self.mode {
+            WindowMode::QuickLauncher => {
+                self.render_quick_launcher(ctx);
+            }
+            WindowMode::FullConfig => {
+                self.render_full_config(ctx);
+            }
+        }
+    }
+}
+
+pub fn raise_x11_window_to_top(title: &str) {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, EventMask};
+
+    if let Ok((conn, screen_num)) = x11rb::connect(None) {
+        let setup = conn.setup();
+        let root = setup.roots[screen_num].root;
+
+        if let Ok(net_client_list) = conn.intern_atom(false, b"_NET_CLIENT_LIST") {
+            if let Ok(atom_reply) = net_client_list.reply() {
+                if let Ok(prop_cookie) = conn.get_property(false, root, atom_reply.atom, AtomEnum::WINDOW, 0, 1024) {
+                    if let Ok(prop_reply) = prop_cookie.reply() {
+                        if let Some(windows) = prop_reply.value32() {
+                            for win_id in windows {
+                                if let Ok(name_cookie) = conn.get_property(false, win_id, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 1024) {
+                                    if let Ok(name_reply) = name_cookie.reply() {
+                                        let name = String::from_utf8_lossy(&name_reply.value);
+                                        if name.contains(title) || title.contains(&*name) {
+                                            // 1. Set _NET_WM_STATE_ABOVE and _NET_WM_STATE_STAYS_ON_TOP
+                                            if let (Ok(net_wm_state), Ok(net_wm_above), Ok(net_wm_stays_on_top)) = (
+                                                conn.intern_atom(false, b"_NET_WM_STATE"),
+                                                conn.intern_atom(false, b"_NET_WM_STATE_ABOVE"),
+                                                conn.intern_atom(false, b"_NET_WM_STATE_STAYS_ON_TOP"),
+                                            ) {
+                                                if let (Ok(state_atom), Ok(above_atom), Ok(stays_atom)) = (
+                                                    net_wm_state.reply(),
+                                                    net_wm_above.reply(),
+                                                    net_wm_stays_on_top.reply(),
+                                                ) {
+                                                    let event = x11rb::protocol::xproto::ClientMessageEvent {
+                                                        response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
+                                                        format: 32,
+                                                        sequence: 0,
+                                                        window: win_id,
+                                                        type_: state_atom.atom,
+                                                        data: x11rb::protocol::xproto::ClientMessageData::from([
+                                                            1, // _NET_WM_STATE_ADD
+                                                            above_atom.atom,
+                                                            stays_atom.atom,
+                                                            1, // normal source indication
+                                                            0,
+                                                        ]),
+                                                    };
+                                                    let _ = conn.send_event(false, root, EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY, event);
+                                                }
+                                            }
+
+                                            // 2. Set _NET_ACTIVE_WINDOW
+                                            if let Ok(net_active) = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW") {
+                                                if let Ok(active_atom) = net_active.reply() {
+                                                    let event = x11rb::protocol::xproto::ClientMessageEvent {
+                                                        response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
+                                                        format: 32,
+                                                        sequence: 0,
+                                                        window: win_id,
+                                                        type_: active_atom.atom,
+                                                        data: x11rb::protocol::xproto::ClientMessageData::from([
+                                                            1, // source: application
+                                                            0, // timestamp
+                                                            0,
+                                                            0,
+                                                            0,
+                                                        ]),
+                                                    };
+                                                    let _ = conn.send_event(false, root, EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY, event);
+                                                }
+                                            }
+
+                                            // 3. ConfigureWindow stack above
+                                            let values = x11rb::protocol::xproto::ConfigureWindowAux::default()
+                                                .stack_mode(x11rb::protocol::xproto::StackMode::ABOVE);
+                                            let _ = conn.configure_window(win_id, &values);
+                                            let _ = conn.flush();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Lwsc2ConfigApp {
+    fn render_quick_launcher(&mut self, ctx: &egui::Context) {
+        let mut action_to_run = None;
+        let mut seq_to_run = None;
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("⚡ Quick Launcher")
+                        .size(16.0)
+                        .strong()
+                        .color(egui::Color32::from_rgb(100, 200, 255)),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new("[Esc: Fermer]")
+                            .size(11.0)
+                            .color(egui::Color32::from_rgb(140, 140, 140)),
+                    );
+                    if ui.small_button("⚙ Options").clicked() {
+                        SHOW_FULL_CONFIG_REQUEST.store(true, Ordering::SeqCst);
+                    }
+                });
+            });
+
+            ui.separator();
+            ui.add_space(6.0);
+
+            // Row 1: Actions Dropdown + Play button
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Action :").strong().size(13.0));
+                ui.add_space(14.0);
+
+                let selected_action_label = if let Some(a) = self.actions.get(self.selected_action_idx) {
+                    let sc = a
+                        .shortcut
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| format!(" [{}]", s.trim()))
+                        .unwrap_or_default();
+                    if !a.display_name.is_empty() {
+                        format!("{}{}", a.display_name, sc)
+                    } else {
+                        format!("{}{}", a.name, sc)
+                    }
+                } else {
+                    "Aucune action disponible".to_string()
+                };
+
+                egui::ComboBox::from_id_source("quick_action_select")
+                    .selected_text(selected_action_label)
+                    .width(280.0)
+                    .show_ui(ui, |ui| {
+                        for (idx, a) in self.actions.iter().enumerate() {
+                            let sc = a
+                                .shortcut
+                                .as_deref()
+                                .filter(|s| !s.trim().is_empty())
+                                .map(|s| format!(" [{}]", s.trim()))
+                                .unwrap_or_default();
+                            let text = if !a.display_name.is_empty() {
+                                format!("{}. {}{}", idx + 1, a.display_name, sc)
+                            } else {
+                                format!("{}. {}{}", idx + 1, a.name, sc)
+                            };
+                            ui.selectable_value(&mut self.selected_action_idx, idx, text);
+                        }
+                    });
+
+                let play_btn = egui::Button::new(
+                    egui::RichText::new("▶ Play")
+                        .strong()
+                        .color(egui::Color32::BLACK),
+                )
+                .fill(egui::Color32::from_rgb(100, 220, 120));
+
+                if ui.add_sized([65.0, 24.0], play_btn).clicked() {
+                    if let Some(a) = self.actions.get(self.selected_action_idx) {
+                        action_to_run = Some(a.name.clone());
+                    }
+                }
+            });
+
+            ui.add_space(6.0);
+
+            // Row 2: Sequences Dropdown + Play button
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Séquence :").strong().size(13.0));
+                ui.add_space(2.0);
+
+                let selected_seq_label = if let Some(s) = self.sequences.get(self.selected_seq_idx) {
+                    let sc = s
+                        .shortcut
+                        .as_deref()
+                        .filter(|sc| !sc.trim().is_empty())
+                        .map(|sc| format!(" [{}]", sc.trim()))
+                        .unwrap_or_default();
+                    format!("{}{}", s.name, sc)
+                } else {
+                    "Aucune séquence disponible".to_string()
+                };
+
+                egui::ComboBox::from_id_source("quick_seq_select")
+                    .selected_text(selected_seq_label)
+                    .width(280.0)
+                    .show_ui(ui, |ui| {
+                        for (idx, s) in self.sequences.iter().enumerate() {
+                            let sc = s
+                                .shortcut
+                                .as_deref()
+                                .filter(|sc| !sc.trim().is_empty())
+                                .map(|sc| format!(" [{}]", sc.trim()))
+                                .unwrap_or_default();
+                            let text = format!("{}. {}{}", idx + 1, s.name, sc);
+                            ui.selectable_value(&mut self.selected_seq_idx, idx, text);
+                        }
+                    });
+
+                let play_btn = egui::Button::new(
+                    egui::RichText::new("▶ Play")
+                        .strong()
+                        .color(egui::Color32::BLACK),
+                )
+                .fill(egui::Color32::from_rgb(100, 180, 255));
+
+                if ui.add_sized([65.0, 24.0], play_btn).clicked() {
+                    if let Some(s) = self.sequences.get(self.selected_seq_idx) {
+                        seq_to_run = Some(s.name.clone());
+                    }
+                }
+            });
+        });
+
+        if let Some(action_name) = action_to_run {
+            self.is_visible = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+
+            let am = Arc::clone(&self.action_manager);
+            let st = self.state_thread.clone();
+            let wt = self.window_tracker.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(80));
+                execute_action_worker(&am, &st, &wt, &action_name);
+            });
+        } else if let Some(seq_name) = seq_to_run {
+            self.is_visible = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+
+            let am = Arc::clone(&self.action_manager);
+            let st = self.state_thread.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(80));
+                execute_sequence_worker(&am, &st, &seq_name);
+            });
+        }
+    }
+
+    fn render_full_config(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("💾 Save Configurations").clicked() {
@@ -183,7 +635,7 @@ impl eframe::App for Lwsc2ConfigApp {
                 }
                 ui.add_space(20.0);
                 if !self.notification_msg.is_empty() && std::time::Instant::now() < self.notification_expire {
-                    ui.label(egui::RichText::new(&self.notification_msg).color(egui::Color32::from_rgb(0, 150, 0)).strong());
+                    ui.label(egui::RichText::new(&self.notification_msg).color(egui::Color32::from_rgb(100, 220, 120)).strong());
                 }
             });
         });
@@ -221,10 +673,17 @@ impl eframe::App for Lwsc2ConfigApp {
                         let current_st = self.state_thread.get_current_state();
 
                         for (idx, action) in self.actions.iter_mut().enumerate() {
+                            let shortcut_suffix = action
+                                .shortcut
+                                .as_deref()
+                                .filter(|s| !s.trim().is_empty())
+                                .map(|s| format!("  [{}]", s.trim()))
+                                .unwrap_or_default();
+
                             let label = if !action.display_name.is_empty() {
-                                format!("{}. {} [{}]", idx + 1, action.display_name, action.name)
+                                format!("{}. {} ({}){}", idx + 1, action.display_name, action.name, shortcut_suffix)
                             } else {
-                                format!("{}. [{}]", idx + 1, action.name)
+                                format!("{}. {}{}", idx + 1, action.name, shortcut_suffix)
                             };
 
                             egui::CollapsingHeader::new(label)
@@ -447,12 +906,21 @@ impl eframe::App for Lwsc2ConfigApp {
                         let mut seq_to_remove = None;
 
                         for (s_idx, seq) in self.sequences.iter_mut().enumerate() {
-                            egui::CollapsingHeader::new(format!("Séquence: {} ({})", seq.name, seq.shortcut.as_deref().unwrap_or("aucun raccourci")))
+                            let shortcut_suffix = seq
+                                .shortcut
+                                .as_deref()
+                                .filter(|s| !s.trim().is_empty())
+                                .map(|s| format!("  [{}]", s.trim()))
+                                .unwrap_or_default();
+                            let label = format!("{}. {}{}", s_idx + 1, seq.name, shortcut_suffix);
+
+                            egui::CollapsingHeader::new(label)
                                 .id_source(format!("seq_header_idx_{}", s_idx))
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.checkbox(&mut seq.enabled, "Enabled (Active)");
+                                        ui.checkbox(&mut seq.repeat, "🔁 Loop (Répéter en boucle)");
                                         ui.add_space(20.0);
                                         if ui.button("🗑 Supprimer la séquence").clicked() {
                                             seq_to_remove = Some(s_idx);
@@ -470,7 +938,7 @@ impl eframe::App for Lwsc2ConfigApp {
                                         if ui.add(egui::TextEdit::singleline(&mut sc).desired_width(120.0)).changed() {
                                             seq.shortcut = if sc.trim().is_empty() { None } else { Some(sc.trim().to_string()) };
                                         }
-                                        ui.label("(ex: ctrl+m, ctrl+l, ctrl+g)");
+                                        ui.label("(ex: shift+m, shift+g, maj+l)");
                                     });
 
                                     ui.horizontal(|ui| {
@@ -587,6 +1055,7 @@ impl eframe::App for Lwsc2ConfigApp {
                                 name: format!("new_sequence_{}", self.sequences.len() + 1),
                                 description: "Nouvelle séquence".to_string(),
                                 enabled: true,
+                                repeat: false,
                                 shortcut: None,
                                 schedules: None,
                                 steps: Vec::new(),
@@ -605,6 +1074,10 @@ impl eframe::App for Lwsc2ConfigApp {
                             ui.horizontal(|ui| {
                                 ui.label("Ouvrir Configuration (Open Config) :");
                                 ui.add(egui::TextEdit::singleline(&mut self.shortcuts.open_config).desired_width(120.0));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Lanceur Rapide (Quick Launcher) :");
+                                ui.add(egui::TextEdit::singleline(&mut self.shortcuts.quick_launcher).desired_width(120.0));
                             });
                             ui.horizontal(|ui| {
                                 ui.label("Détection Manuelle (Force Detect) :");
@@ -653,6 +1126,44 @@ fn save_all_configs(
         if a.action_type != crate::core::action::ActionType::ClickTemplate {
             entry.insert(serde_yaml::Value::String("action_type".to_string()), serde_yaml::Value::String(a.action_type.as_str().to_string()));
         }
+        if let Some((sx, sy)) = a.drag_start {
+            let d_seq = vec![
+                serde_yaml::Value::Number(serde_yaml::Number::from(sx as f64)),
+                serde_yaml::Value::Number(serde_yaml::Number::from(sy as f64)),
+            ];
+            entry.insert(serde_yaml::Value::String("drag_start".to_string()), serde_yaml::Value::Sequence(d_seq));
+        }
+        if let Some((ex, ey)) = a.drag_end {
+            let d_seq = vec![
+                serde_yaml::Value::Number(serde_yaml::Number::from(ex as f64)),
+                serde_yaml::Value::Number(serde_yaml::Number::from(ey as f64)),
+            ];
+            entry.insert(serde_yaml::Value::String("drag_end".to_string()), serde_yaml::Value::Sequence(d_seq));
+        }
+        if a.drag_duration_ms != 300 {
+            entry.insert(serde_yaml::Value::String("drag_duration_ms".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(a.drag_duration_ms)));
+        }
+        if let Some((cx, cy)) = a.coords {
+            let c_seq = vec![
+                serde_yaml::Value::Number(serde_yaml::Number::from(cx as f64)),
+                serde_yaml::Value::Number(serde_yaml::Number::from(cy as f64)),
+            ];
+            entry.insert(serde_yaml::Value::String("coords".to_string()), serde_yaml::Value::Sequence(c_seq));
+        }
+        if let Some(r) = a.roi {
+            let mut roi_map = serde_yaml::Mapping::new();
+            roi_map.insert(serde_yaml::Value::String("xmin".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(r.xmin as f64)));
+            roi_map.insert(serde_yaml::Value::String("xmax".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(r.xmax as f64)));
+            roi_map.insert(serde_yaml::Value::String("ymin".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(r.ymin as f64)));
+            roi_map.insert(serde_yaml::Value::String("ymax".to_string()), serde_yaml::Value::Number(serde_yaml::Number::from(r.ymax as f64)));
+            entry.insert(serde_yaml::Value::String("roi".to_string()), serde_yaml::Value::Mapping(roi_map));
+        }
+        if let Some(ref kn) = a.key_name {
+            entry.insert(serde_yaml::Value::String("key_name".to_string()), serde_yaml::Value::String(kn.clone()));
+        }
+        if a.save_cursor {
+            entry.insert(serde_yaml::Value::String("save_cursor".to_string()), serde_yaml::Value::Bool(true));
+        }
         if let Some(ref tmpl) = a.template {
             entry.insert(serde_yaml::Value::String("template".to_string()), serde_yaml::Value::String(tmpl.clone()));
         }
@@ -691,6 +1202,9 @@ fn save_all_configs(
         }
         if !s.enabled {
             entry.insert(serde_yaml::Value::String("enabled".to_string()), serde_yaml::Value::Bool(false));
+        }
+        if s.repeat {
+            entry.insert(serde_yaml::Value::String("loop".to_string()), serde_yaml::Value::Bool(true));
         }
         if let Some(ref sc) = s.shortcut {
             entry.insert(serde_yaml::Value::String("shortcut".to_string()), serde_yaml::Value::String(sc.clone()));

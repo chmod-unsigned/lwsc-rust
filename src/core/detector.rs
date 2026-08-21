@@ -7,7 +7,7 @@ use crate::core::state::{
     GameState, StateType, StateDefinition, STATE_DEFINITIONS,
 };
 use crate::core::button::{
-    ButtonDefinition, ButtonDetection, load_buttons_from_config,
+    ButtonDefinition, ButtonDetection,
 };
 use crate::vision::matching::TemplateMatcher;
 
@@ -33,7 +33,7 @@ pub struct StateDetector {
 
 impl StateDetector {
     pub fn new<P: AsRef<Path>>(asset_root: P) -> Self {
-        let buttons = load_buttons_from_config("config/states.yaml").unwrap_or_default();
+        let buttons = crate::core::state::BUTTON_DEFINITIONS.clone();
         Self {
             matcher: TemplateMatcher::new(asset_root),
             definitions: STATE_DEFINITIONS.clone(),

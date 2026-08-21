@@ -53,8 +53,12 @@ impl GameBot {
         handles.push(wt_handle);
 
         // 2. Initialize ActionManager
-        let initial_actions = load_actions_from_config("config/states.yaml").unwrap_or_default();
-        let initial_sequences = crate::core::state::load_sequences_from_config("config/states.yaml").unwrap_or_default();
+        let initial_actions = load_actions_from_config("config/actions.yaml")
+            .or_else(|_| load_actions_from_config("config/states.yaml"))
+            .unwrap_or_default();
+        let initial_sequences = crate::core::state::load_sequences_from_config("config/sequences.yaml")
+            .or_else(|_| crate::core::state::load_sequences_from_config("config/states.yaml"))
+            .unwrap_or_default();
         let action_manager = Arc::new(ActionManager::new(initial_actions, initial_sequences));
 
         // 3. Start StateDetector Thread (triggered on any mouse/keyboard activity & periodically)
@@ -89,11 +93,20 @@ impl GameBot {
                         wt_clone_for_hk.clone(),
                     );
                 }
+                "quick_launcher" | "ctrl_x" => {
+                    println!("{}", "\n[Shortcut] Opening / Toggling Quick Launcher (Ctrl+X)...".cyan().bold());
+                    ConfigWindow::open_quick_launcher(
+                        am_clone.clone(),
+                        st_clone_for_hk.clone(),
+                        wt_clone_for_hk.clone(),
+                    );
+                }
                 "show_help" | "ctrl_h" => {
                     let shortcuts = crate::core::load_shortcuts_from_config("config/states.yaml");
                     println!("{}", "\n=== LWSC2 Global Shortcuts ===".bright_blue().bold());
                     println!("  {:<15} : Toggle Pause / Resume automated bot actions", shortcuts.toggle_pause.green().bold());
-                    println!("  {:<15} : Open / Toggle Native Configuration & Action Manager Window", shortcuts.open_config.green().bold());
+                    println!("  {:<15} : Open / Toggle Native Configuration Window", shortcuts.open_config.green().bold());
+                    println!("  {:<15} : Open / Toggle Mini Quick Launcher Window", shortcuts.quick_launcher.green().bold());
                     println!("  {:<15} : Force immediate State Detection pass", shortcuts.force_detect.green().bold());
                     println!("  {:<15} : Display this Shortcuts Help", shortcuts.show_help.green().bold());
                     let act_shortcuts = am_clone.get_shortcuts();
@@ -119,12 +132,17 @@ impl GameBot {
                 }
                 s if s.starts_with("action:") => {
                     let action_name = s.strip_prefix("action:").unwrap();
-                    println!("{}", format!("\n[Action Shortcut] Triggering action '{}'...", action_name).cyan().bold());
                     let win = wt_clone_for_hk.get_window_info();
                     if !win.is_found {
                         println!("{}", "[Action Shortcut] Error: Game window not found".red());
                         return;
                     }
+                    if !win.is_focused {
+                        println!("{}", format!("[Action Shortcut] Ignored '{}': Game window not focused (bot is paused)", action_name).yellow());
+                        return;
+                    }
+
+                    println!("{}", format!("\n[Action Shortcut] Triggering action '{}'...", action_name).cyan().bold());
 
                     let capturer = crate::vision::ScreenCapturer::new();
                     if let Some(frame) = capturer.capture_roi(win.x, win.y, win.width, win.height) {
@@ -136,6 +154,7 @@ impl GameBot {
                             &frame,
                             &mut matcher,
                             true, // bypass cooldown when triggered directly via manual shortcut
+                            true, // bypass state check on manual trigger
                         ) {
                             if action_res.executed {
                                 if let Some((cx, cy)) = action_res.click_coords {
@@ -210,6 +229,12 @@ impl GameBot {
                 }
                 s if s.starts_with("sequence:") => {
                     let seq_name = s.strip_prefix("sequence:").unwrap();
+                    let win = wt_clone_for_hk.get_window_info();
+                    if !win.is_focused {
+                        println!("{}", format!("[Sequence Shortcut] Ignored '{}': Game window not focused (bot is paused)", seq_name).yellow());
+                        return;
+                    }
+
                     println!("{}", format!("\n[Sequence Shortcut] Triggering sequence '{}'...", seq_name).cyan().bold());
                     if am_clone.trigger_sequence(seq_name) {
                         println!("{}", format!("[Sequence] Sequence '{}' started.", seq_name).green());
@@ -293,16 +318,19 @@ impl GameBot {
         }
         println!("{}", "--------------------------------------------------------------------".bright_blue());
         println!(" [Active Shortcuts]");
-        println!("   {} : Open/Toggle Configuration & Action Manager Window", "Ctrl+O".green().bold());
+        println!("   {} : Open/Toggle Configuration Window", "Ctrl+O".green().bold());
+        println!("   {} : Open/Toggle Mini Quick Launcher", "Ctrl+X".green().bold());
         println!("   {} : Force immediate State Detection pass", "Ctrl+S".green().bold());
         println!("   {} : Display global shortcuts help", "Ctrl+H".green().bold());
         println!("{}", "====================================================================".bright_blue());
         println!("{}", "Bot is active: Continuous detection on ANY mouse or keyboard event. Press Ctrl+C to exit.\n".bold());
 
-        // Keep main thread alive
-        loop {
-            thread::sleep(Duration::from_secs(1));
-        }
+        // Run GUI event loop on main thread (blocks until app exits)
+        ConfigWindow::run_on_main_thread(
+            Arc::clone(&self.action_manager),
+            self.state_thread.clone(),
+            self.window_tracker.clone(),
+        );
     }
 
     pub fn stop(&self) {

@@ -30,6 +30,11 @@ pub struct ActivePixel {
     pub alpha: u8,
 }
 
+#[inline(always)]
+pub fn rgb_to_gray(r: u8, g: u8, b: u8) -> f32 {
+    0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32
+}
+
 #[derive(Debug, Clone)]
 pub struct CachedTemplate {
     pub image: RgbaImage,
@@ -45,6 +50,8 @@ pub struct CachedTemplate {
     pub primary_max_diff: u32,
     pub secondary_max_diff: u32,
     pub sample_max_diff: u32,
+    pub has_zncc: bool,
+    pub zncc_weights: Vec<f32>,
 }
 
 pub struct TemplateMatcher {
@@ -198,6 +205,30 @@ impl TemplateMatcher {
                     }
                 }
 
+                // Compute ZNCC (Zero-mean Normalized Cross-Correlation) precomputed weights
+                let n = active_pixels.len() as f32;
+                let mut gray_sum = 0.0f32;
+                for p in &active_pixels {
+                    gray_sum += rgb_to_gray(p.r, p.g, p.b);
+                }
+                let t_mean = gray_sum / n.max(1.0);
+                let mut var_sum = 0.0f32;
+                for p in &active_pixels {
+                    let diff = rgb_to_gray(p.r, p.g, p.b) - t_mean;
+                    var_sum += diff * diff;
+                }
+                let t_var = var_sum / n.max(1.0);
+                let t_std = t_var.sqrt();
+                let (has_zncc, zncc_weights) = if t_std > 2.0 {
+                    let denom = t_std * n;
+                    let weights: Vec<f32> = active_pixels.iter().map(|p| {
+                        (rgb_to_gray(p.r, p.g, p.b) - t_mean) / denom
+                    }).collect();
+                    (true, weights)
+                } else {
+                    (false, Vec::new())
+                };
+
                 Some(CachedTemplate {
                     image: rgba,
                     has_alpha,
@@ -212,6 +243,8 @@ impl TemplateMatcher {
                     primary_max_diff: primary_max_diff.max(1),
                     secondary_max_diff: secondary_max_diff.max(1),
                     sample_max_diff: sample_max_diff.max(1),
+                    has_zncc,
+                    zncc_weights,
                 })
             } else {
                 None
@@ -327,6 +360,8 @@ impl TemplateMatcher {
         let secondary_max_diff = tmpl.secondary_max_diff;
         let sample_max_diff = tmpl.sample_max_diff;
         let max_total_diff = tmpl.max_total_diff;
+        let has_zncc = tmpl.has_zncc;
+        let zncc_weights = &tmpl.zncc_weights;
 
         let global_best_score = AtomicU32::new((threshold * 10000.0) as u32);
 
@@ -464,7 +499,42 @@ impl TemplateMatcher {
                         continue;
                     }
 
-                    let score = (1.0 - (total_diff as f32 / max_total_diff as f32)).clamp(0.0, 1.0);
+                    let score = if has_zncc {
+                        let n = prep_active.len() as f32;
+                        let mut p_sum = 0.0f32;
+                        for p in &prep_active {
+                            let s_idx = base_idx + p.byte_offset;
+                            p_sum += rgb_to_gray(screen_raw[s_idx], screen_raw[s_idx + 1], screen_raw[s_idx + 2]);
+                        }
+                        let p_mean = p_sum / n.max(1.0);
+                        let mut p_var_sum = 0.0f32;
+                        for p in &prep_active {
+                            let s_idx = base_idx + p.byte_offset;
+                            let diff = rgb_to_gray(screen_raw[s_idx], screen_raw[s_idx + 1], screen_raw[s_idx + 2]) - p_mean;
+                            p_var_sum += diff * diff;
+                        }
+                        let p_var = p_var_sum / n.max(1.0);
+                        if p_var < 4.0 {
+                            0.0f32
+                        } else {
+                            let p_std = p_var.sqrt();
+                            let mut corr = 0.0f32;
+                            for (i, p) in prep_active.iter().enumerate() {
+                                let s_idx = base_idx + p.byte_offset;
+                                let g = rgb_to_gray(screen_raw[s_idx], screen_raw[s_idx + 1], screen_raw[s_idx + 2]);
+                                corr += zncc_weights[i] * ((g - p_mean) / p_std);
+                            }
+                            let l1_score = (1.0 - (total_diff as f32 / max_total_diff as f32)).clamp(0.0, 1.0);
+                            if corr > 0.0 {
+                                (corr * 0.75 + l1_score * 0.25).clamp(0.0, 1.0)
+                            } else {
+                                0.0f32
+                            }
+                        }
+                    } else {
+                        (1.0 - (total_diff as f32 / max_total_diff as f32)).clamp(0.0, 1.0)
+                    };
+
                     if score > local_best_score {
                         local_best_score = score;
                         local_best_x = x;
@@ -492,5 +562,268 @@ impl TemplateMatcher {
             center_y: best_y + th / 2,
             template_path: template_path.to_string(),
         }
+    }
+
+    /// Finds ALL non-overlapping occurrences of a template within ROI in parallel using NMS.
+    pub fn find_all_matches(
+        &mut self,
+        screen: &RgbaImage,
+        template_path: &str,
+        threshold: f32,
+        roi: Option<(u32, u32, u32, u32)>,
+        min_distance: Option<u32>,
+    ) -> Vec<MatchResult> {
+        let tmpl = match self.load_template(template_path) {
+            Some(t) => t.clone(),
+            None => return Vec::new(),
+        };
+
+        let (screen_w, screen_h) = screen.dimensions();
+        let tw = tmpl.width;
+        let th = tmpl.height;
+
+        let (roi_x1, roi_y1, roi_x2, roi_y2) = match roi {
+            Some((x1, y1, x2, y2)) => (
+                x1.min(screen_w),
+                y1.min(screen_h),
+                x2.min(screen_w).max(x1 + 1),
+                y2.min(screen_h).max(y1 + 1),
+            ),
+            None => (0, 0, screen_w, screen_h),
+        };
+
+        if (roi_x2 - roi_x1) < tw || (roi_y2 - roi_y1) < th {
+            return Vec::new();
+        }
+
+        let max_x = roi_x2 - tw;
+        let max_y = roi_y2 - th;
+
+        let screen_raw = screen.as_raw();
+        let screen_stride = (screen_w * 4) as usize;
+
+        struct PreparedPixel {
+            byte_offset: usize,
+            r: u8,
+            g: u8,
+            b: u8,
+            alpha: u8,
+        }
+
+        let prep_primary: Vec<PreparedPixel> = tmpl.primary_anchors.iter().map(|p| PreparedPixel {
+            byte_offset: (p.offset_y as usize) * screen_stride + (p.offset_x as usize) * 4,
+            r: p.r,
+            g: p.g,
+            b: p.b,
+            alpha: p.alpha,
+        }).collect();
+
+        let prep_secondary: Vec<PreparedPixel> = tmpl.secondary_anchors.iter().map(|p| PreparedPixel {
+            byte_offset: (p.offset_y as usize) * screen_stride + (p.offset_x as usize) * 4,
+            r: p.r,
+            g: p.g,
+            b: p.b,
+            alpha: p.alpha,
+        }).collect();
+
+        let prep_samples: Vec<PreparedPixel> = tmpl.samples.iter().map(|p| PreparedPixel {
+            byte_offset: (p.offset_y as usize) * screen_stride + (p.offset_x as usize) * 4,
+            r: p.r,
+            g: p.g,
+            b: p.b,
+            alpha: p.alpha,
+        }).collect();
+
+        let prep_active: Vec<PreparedPixel> = tmpl.active_pixels.iter().map(|p| PreparedPixel {
+            byte_offset: (p.offset_y as usize) * screen_stride + (p.offset_x as usize) * 4,
+            r: p.r,
+            g: p.g,
+            b: p.b,
+            alpha: p.alpha,
+        }).collect();
+
+        let is_all_opaque = tmpl.is_all_opaque;
+        let primary_max_diff = tmpl.primary_max_diff;
+        let secondary_max_diff = tmpl.secondary_max_diff;
+        let sample_max_diff = tmpl.sample_max_diff;
+        let max_total_diff = tmpl.max_total_diff;
+        let has_zncc = tmpl.has_zncc;
+        let zncc_weights = &tmpl.zncc_weights;
+
+        let max_allowed_p = (primary_max_diff as f32 * (1.0 - threshold)) as u32;
+        let max_allowed_s = (secondary_max_diff as f32 * (1.0 - threshold)) as u32;
+        let max_allowed_sample = (sample_max_diff as f32 * (1.0 - threshold)) as u32;
+        let max_allowed_diff = (max_total_diff as f32 * (1.0 - threshold)) as u32;
+
+        let mut candidates: Vec<(f32, u32, u32)> = (roi_y1..=max_y)
+            .into_par_iter()
+            .flat_map(|y| {
+                let mut row_matches = Vec::new();
+                let y_base_idx = (y as usize) * screen_stride;
+
+                for x in roi_x1..=max_x {
+                    let base_idx = y_base_idx + (x as usize) * 4;
+
+                    // Stage 1: Primary Anchors
+                    let mut p_diff: u32 = 0;
+                    let mut fail = false;
+                    for a in &prep_primary {
+                        let s_idx = base_idx + a.byte_offset;
+                        let s_r = screen_raw[s_idx];
+                        let s_g = screen_raw[s_idx + 1];
+                        let s_b = screen_raw[s_idx + 2];
+                        let pd = s_r.abs_diff(a.r) as u32 + s_g.abs_diff(a.g) as u32 + s_b.abs_diff(a.b) as u32;
+                        p_diff += if a.alpha == 255 { pd } else { (pd * a.alpha as u32) / 255 };
+                        if p_diff > max_allowed_p {
+                            fail = true;
+                            break;
+                        }
+                    }
+                    if fail { continue; }
+
+                    // Stage 2: Secondary Anchors
+                    if prep_secondary.len() > prep_primary.len() {
+                        let mut s_diff: u32 = 0;
+                        for a in &prep_secondary {
+                            let s_idx = base_idx + a.byte_offset;
+                            let s_r = screen_raw[s_idx];
+                            let s_g = screen_raw[s_idx + 1];
+                            let s_b = screen_raw[s_idx + 2];
+                            let pd = s_r.abs_diff(a.r) as u32 + s_g.abs_diff(a.g) as u32 + s_b.abs_diff(a.b) as u32;
+                            s_diff += if a.alpha == 255 { pd } else { (pd * a.alpha as u32) / 255 };
+                            if s_diff > max_allowed_s {
+                                fail = true;
+                                break;
+                            }
+                        }
+                        if fail { continue; }
+                    }
+
+                    // Stage 3: Subsampled Grid
+                    if prep_samples.len() > prep_secondary.len() {
+                        let mut sample_diff: u32 = 0;
+                        for s in &prep_samples {
+                            let s_idx = base_idx + s.byte_offset;
+                            let s_r = screen_raw[s_idx];
+                            let s_g = screen_raw[s_idx + 1];
+                            let s_b = screen_raw[s_idx + 2];
+                            let pd = s_r.abs_diff(s.r) as u32 + s_g.abs_diff(s.g) as u32 + s_b.abs_diff(s.b) as u32;
+                            sample_diff += if s.alpha == 255 { pd } else { (pd * s.alpha as u32) / 255 };
+                            if sample_diff > max_allowed_sample {
+                                fail = true;
+                                break;
+                            }
+                        }
+                        if fail { continue; }
+                    }
+
+                    // Stage 4: Full Check
+                    let mut total_diff: u32 = 0;
+                    let mut early_exit = false;
+
+                    if is_all_opaque {
+                        for p in &prep_active {
+                            let s_idx = base_idx + p.byte_offset;
+                            let s_r = screen_raw[s_idx];
+                            let s_g = screen_raw[s_idx + 1];
+                            let s_b = screen_raw[s_idx + 2];
+                            total_diff += s_r.abs_diff(p.r) as u32 + s_g.abs_diff(p.g) as u32 + s_b.abs_diff(p.b) as u32;
+                            if total_diff > max_allowed_diff {
+                                early_exit = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        for p in &prep_active {
+                            let s_idx = base_idx + p.byte_offset;
+                            let s_r = screen_raw[s_idx];
+                            let s_g = screen_raw[s_idx + 1];
+                            let s_b = screen_raw[s_idx + 2];
+                            let pd = s_r.abs_diff(p.r) as u32 + s_g.abs_diff(p.g) as u32 + s_b.abs_diff(p.b) as u32;
+                            total_diff += (pd * p.alpha as u32) / 255;
+                            if total_diff > max_allowed_diff {
+                                early_exit = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if early_exit {
+                        continue;
+                    }
+
+                    let score = if has_zncc {
+                        let n = prep_active.len() as f32;
+                        let mut p_sum = 0.0f32;
+                        for p in &prep_active {
+                            let s_idx = base_idx + p.byte_offset;
+                            p_sum += rgb_to_gray(screen_raw[s_idx], screen_raw[s_idx + 1], screen_raw[s_idx + 2]);
+                        }
+                        let p_mean = p_sum / n.max(1.0);
+                        let mut p_var_sum = 0.0f32;
+                        for p in &prep_active {
+                            let s_idx = base_idx + p.byte_offset;
+                            let diff = rgb_to_gray(screen_raw[s_idx], screen_raw[s_idx + 1], screen_raw[s_idx + 2]) - p_mean;
+                            p_var_sum += diff * diff;
+                        }
+                        let p_var = p_var_sum / n.max(1.0);
+                        if p_var < 4.0 {
+                            0.0f32
+                        } else {
+                            let p_std = p_var.sqrt();
+                            let mut corr = 0.0f32;
+                            for (i, p) in prep_active.iter().enumerate() {
+                                let s_idx = base_idx + p.byte_offset;
+                                let g = rgb_to_gray(screen_raw[s_idx], screen_raw[s_idx + 1], screen_raw[s_idx + 2]);
+                                corr += zncc_weights[i] * ((g - p_mean) / p_std);
+                            }
+                            let l1_score = (1.0 - (total_diff as f32 / max_total_diff as f32)).clamp(0.0, 1.0);
+                            if corr > 0.0 {
+                                (corr * 0.75 + l1_score * 0.25).clamp(0.0, 1.0)
+                            } else {
+                                0.0f32
+                            }
+                        }
+                    } else {
+                        (1.0 - (total_diff as f32 / max_total_diff as f32)).clamp(0.0, 1.0)
+                    };
+
+                    if score >= threshold {
+                        row_matches.push((score, x, y));
+                    }
+                }
+                row_matches
+            })
+            .collect();
+
+        // Sort candidates by score descending
+        candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let min_d = min_distance.unwrap_or_else(|| tw.max(th).max(30)) as f32;
+        let mut results: Vec<MatchResult> = Vec::new();
+
+        for (score, cx, cy) in candidates {
+            let too_close = results.iter().any(|r| {
+                let dx = (cx as f32) - (r.box_x as f32);
+                let dy = (cy as f32) - (r.box_y as f32);
+                (dx * dx + dy * dy).sqrt() < min_d
+            });
+
+            if !too_close {
+                results.push(MatchResult {
+                    matched: true,
+                    confidence: score,
+                    box_x: cx,
+                    box_y: cy,
+                    width: tw,
+                    height: th,
+                    center_x: cx + tw / 2,
+                    center_y: cy + th / 2,
+                    template_path: template_path.to_string(),
+                });
+            }
+        }
+
+        results
     }
 }

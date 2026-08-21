@@ -6,6 +6,12 @@ alliance_gift_claim:
   state: ALLIANCE_GIFTS_REGULAR
   parent_states:
   - ALLIANCE
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.3199999928474426
+    xmax: 0.5400000214576721
+    ymin: 0.5
+    ymax: 0.6600000262260437
   template: roi/ALLIANCE_GIFTS_BUTTON/expected.png
   cooldown_s: 5.0
   priority: 2
@@ -17,6 +23,13 @@ alliance_help:
   parent_states:
   - BASE
   - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.8600000143051147
+    xmax: 0.9800000190734863
+    ymin: 0.6399999856948853
+    ymax: 0.7699999809265137
+  save_cursor: true
   template: roi/HELP/expected.png
   cooldown_s: 5.0
   priority: 1
@@ -28,6 +41,12 @@ area_from_base:
   button: WORLD_MAP_BUTTON
   parent_states:
   - BASE
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.8799999952316284
+    xmax: 1.0
+    ymin: 0.8600000143051147
+    ymax: 1.0
   template: roi/WORLD_MAP_BUTTON/expected.png
   cooldown_s: 3.0
   priority: 3
@@ -39,6 +58,12 @@ base_view_from_area:
   button: AREA_BASE_BUTTON
   parent_states:
   - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.8799999952316284
+    xmax: 1.0
+    ymin: 0.8600000143051147
+    ymax: 1.0
   template: roi/AREA_BASE_BUTTON/expected.png
   cooldown_s: 3.0
   priority: 3
@@ -50,6 +75,12 @@ base_view_from_world_map:
   button: WORLD_MAP_BASE_BUTTON
   parent_states:
   - WORLD_MAP
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.8799999952316284
+    xmax: 1.0
+    ymin: 0.8600000143051147
+    ymax: 1.0
   template: roi/WORLD_MAP_BASE_BUTTON/expected.png
   cooldown_s: 3.0
   priority: 3
@@ -57,6 +88,13 @@ base_view_from_world_map:
 drag_to_right:
   display_name: Drag to right
   action_type: drag_drop
+  drag_start:
+  - 0.800000011920929
+  - 0.5
+  drag_end:
+  - 0.20000000298023224
+  - 0.5
+  drag_duration_ms: 1000
   shortcut: ctrl+r
 loot_claim:
   display_name: Loot button
@@ -65,6 +103,12 @@ loot_claim:
   parent_states:
   - BASE
   - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.07999999821186066
+    xmax: 0.20000000298023224
+    ymin: 0.17000000178813934
+    ymax: 0.28999999165534973
   template: roi/LOOT_BUTTON/expected/
   cooldown_s: 60.0
   priority: 2
@@ -76,6 +120,12 @@ loot_claim_all:
   state: LOOT
   parent_states:
   - LOOT
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.4000000059604645
+    xmax: 0.5899999737739563
+    ymin: 0.6899999976158142
+    ymax: 0.8299999833106995
   template: roi/LOOT_CLAIM_ALL_BUTTON/expected/
   click_template: claim_all.png
   cooldown_s: 3.0
@@ -89,6 +139,12 @@ main_shop:
   parent_states:
   - BASE
   - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.8700000047683716
+    xmax: 1.0
+    ymin: 0.0
+    ymax: 0.09000000357627869
   template: roi/MAIN_SHOP_BUTTON/expected.png
   cooldown_s: 3.0
   priority: 3
@@ -99,6 +155,12 @@ main_shop_mall:
   button: MAIN_SHOP_MALL_HOT_SALE_PACKS_BUTTON
   parent_states:
   - MAIN_SHOP
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.2800000011920929
+    xmax: 0.6000000238418579
+    ymin: 0.0
+    ymax: 0.1899999976158142
   template: roi/MAIN_SHOP_MALL_HOT_SALE_PACKS/expected/
   cooldown_s: 3.0
   priority: 3
@@ -110,6 +172,12 @@ main_shop_mall_hot_sale_packs:
   parent_states:
   - MAIN_SHOP
   - MAIN_SHOP_MALL
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.2800000011920929
+    xmax: 0.6000000238418579
+    ymin: 0.0
+    ymax: 0.1899999976158142
   template: roi/MAIN_SHOP_MALL_HOT_SALE_PACKS/expected/
   cooldown_s: 5.0
   priority: 3
@@ -121,6 +189,12 @@ main_shop_mall_hot_sale_packs_claim:
   button: MAIN_SHOP_MALL_HOT_SALE_PACKS_CLAIM_BUTTON
   parent_states:
   - MAIN_SHOP_MALL_HOT_SALE_PACKS
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.2800000011920929
+    xmax: 0.4300000071525574
+    ymin: 0.699999988079071
+    ymax: 0.8600000143051147
   template: roi/MAIN_SHOP_MALL_HOT_SALE_PACKS_CLAIM_BUTTON/expected/
   cooldown_s: 5.0
   priority: 3
@@ -133,19 +207,31 @@ radar_task_claim:
   parent_states:
   - BASE
   - AREA
+  drag_duration_ms: 1000
+  roi:
+    xmin: 0.0
+    xmax: 0.09000000357627869
+    ymin: 0.6600000262260437
+    ymax: 0.7799999713897705
   template: roi/RADAR_TASKS_BUTTON/expected.png
   cooldown_s: 3.0
   priority: 3
 search_gold_mine:
   display_name: Gold mine
-  description: Search gold mine via custom Python script
-  enabled: false
+  description: Search and click gold mine POI on map
   parent_states:
+  - BASE
   - AREA
-  action_type: custom
-  cooldown_s: 0.0
+  - WORLD_MAP
+  drag_duration_ms: 1000
+  coords:
+  - 0.5
+  - 0.5
+  roi:
+    xmin: 0.0
+    xmax: 1.0
+    ymin: 0.0
+    ymax: 1.0
+  template: poi/gold_mine.png
   priority: 1
-  script: scripts/search_gold_mine.py
-  args:
-  - --screenshot
-  - last_screenshot.png
+  shortcut: ctrl+g
