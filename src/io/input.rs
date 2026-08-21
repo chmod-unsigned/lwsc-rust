@@ -10,8 +10,6 @@ use colored::Colorize;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 use x11rb::rust_connection::RustConnection;
-use x11rb::connection::RequestConnection;
-use x11rb::protocol::xtest::ConnectionExt as XtestConnectionExt;
 
 use crate::core::detector::DetectionResult;
 use crate::core::state_thread::StateDetectorThread;
@@ -553,222 +551,94 @@ impl<'a> Drop for InputGrabGuard<'a> {
     }
 }
 
-/// Dispatches native hardware-level mouse click to X11 via human-like Bézier movement in <300ms.
+/// Dispatches native hardware-level mouse click to X11 via xdotool instantly.
 /// If `save_cursor` is true, the cursor position is recorded prior to movement and restored immediately after.
-/// Automatically isolates physical mouse movements during the motion to avoid interference.
-pub fn send_x11_click_ex(target_window: Option<u32>, target_x: i16, target_y: i16, save_cursor: bool) -> bool {
-    use x11rb::protocol::xtest::ConnectionExt;
-    use x11rb::protocol::xproto::ConnectionExt as XProtoExt;
-
+pub fn send_x11_click_ex(_target_window: Option<u32>, target_x: i16, target_y: i16, save_cursor: bool) -> bool {
     let _input_guard = BotInputActiveGuard::new();
 
+    let mut current_pos = None;
     if let Ok((conn, screen_num)) = RustConnection::connect(None) {
         let root = conn.setup().roots[screen_num].root;
-        let mut guard = InputGrabGuard::grab_both(&conn, target_window, root);
-
-        // 1. Capture OLD pointer position before moving
-        let current_pos = if let Ok(cookie) = conn.query_pointer(root) {
+        if let Ok(cookie) = conn.query_pointer(root) {
             if let Ok(reply) = cookie.reply() {
-                Some((reply.root_x, reply.root_y))
-            } else {
-                None
+                current_pos = Some((reply.root_x, reply.root_y));
             }
-        } else {
-            None
-        };
-
-        let (start_x, start_y) = current_pos.unwrap_or((target_x, target_y));
-        if save_cursor {
-            println!("[Bot Cursor] Saved OLD mouse position: ({}, {})", start_x, start_y);
         }
+    }
+    let (start_x, start_y) = current_pos.unwrap_or((target_x, target_y));
 
-        // 2. Human-like movement path towards target (in <250ms)
-        let forward_path = generate_human_path(start_x, start_y, target_x, target_y, 250);
-        let total_forward_ms: u128 = forward_path.iter().map(|(_, _, d)| d.as_millis()).sum();
-        println!(
-            "[Bot Movement] Human path ({}, {}) -> ({}, {}): {} steps in {}ms",
-            start_x, start_y, target_x, target_y, forward_path.len(), total_forward_ms
-        );
+    let args = vec![
+        "mousemove".to_string(),
+        target_x.to_string(),
+        target_y.to_string(),
+        "click".to_string(),
+        "1".to_string(),
+    ];
+    let status = std::process::Command::new("xdotool")
+        .args(&args)
+        .status();
 
-        for (px, py, step_delay) in forward_path {
-            let _ = conn.xtest_fake_input(6, 0, 0, root, px, py, 0);
-            let _ = conn.flush();
-            thread::sleep(step_delay);
-        }
-
-        // Micro-pause before press (20-30ms) to ensure cursor is firmly on target
-        let mut rng = SimpleRng::new();
-        let pre_click_ms = rng.gen_range_u64(20, 35);
-        thread::sleep(Duration::from_millis(pre_click_ms));
-
-        // Ungrab the pointer BEFORE the click so the XTest event correctly reaches the target game window.
-        // If we keep it grabbed, the X server routes the synthetic event to the grabbing client (us) instead!
-        guard.ungrab_pointer();
-
-        // 4. Button 1 press (ButtonPress = 4, detail = 1)
-        let _ = conn.xtest_fake_input(4, 1, 0, root, target_x, target_y, 0);
-        let _ = conn.flush();
-
-        // Realistic human click hold duration (90-130ms) so the game UI & event loop definitely register the click
-        let click_hold_ms = rng.gen_range_u64(90, 130);
-        thread::sleep(Duration::from_millis(click_hold_ms));
-
-        // 5. Button 1 release (ButtonRelease = 5, detail = 1)
-        let _ = conn.xtest_fake_input(5, 1, 0, root, target_x, target_y, 0);
-        let _ = conn.flush();
-
-        // Post-release dwell delay (35-50ms) to let the game UI acknowledge release before mouse moves away
-        let post_click_ms = rng.gen_range_u64(35, 55);
-        thread::sleep(Duration::from_millis(post_click_ms));
-
-        // 6. Restore original cursor position if save_cursor was requested
-        if save_cursor {
-            let return_path = generate_human_path(target_x, target_y, start_x, start_y, 160);
-            for (px, py, step_delay) in return_path {
-                let _ = conn.xtest_fake_input(6, 0, 0, root, px, py, 0);
-                let _ = conn.flush();
-                thread::sleep(step_delay);
+    if let Ok(s) = status {
+        if s.success() {
+            if save_cursor {
+                let _ = std::process::Command::new("xdotool")
+                    .args(&["mousemove", &start_x.to_string(), &start_y.to_string()])
+                    .status();
             }
-            let _ = conn.warp_pointer(x11rb::NONE, root, 0, 0, 0, 0, start_x, start_y);
-            let _ = conn.flush();
-            println!("[Bot Cursor] Successfully returned to OLD position: ({}, {})", start_x, start_y);
+            return true;
         }
-
-        return true;
     }
     false
 }
 
-/// Dispatches native hardware-level mouse drag to X11 via XTest extension.
-/// If `sweep_callback` is provided, it is invoked periodically. If it returns true, the drag aborts early.
+/// Dispatches native hardware-level mouse drag to X11 via xdotool.
+/// If `sweep_callback` is provided, it is checked.
 pub fn send_x11_drag(
     _target_window: Option<u32>,
     start_x: i16, start_y: i16,
     end_x: i16, end_y: i16,
-    duration_ms: u64,
+    _duration_ms: u64,
     save_cursor: bool,
     mut sweep_callback: Option<&mut dyn FnMut() -> bool>
 ) -> bool {
     let _input_guard = BotInputActiveGuard::new();
 
-    let (conn, screen_num) = match RustConnection::connect(None) {
-        Ok(c) => c,
-        Err(e) => {
-            println!("[InputManager] X11 Connection failed for drag: {}", e);
-            return false;
-        }
-    };
-
-    let extension = match conn.extension_information(x11rb::protocol::xtest::X11_EXTENSION_NAME) {
-        Ok(ext) => ext,
-        Err(_) => return false,
-    };
-
-    if extension.is_none() {
-        println!("[InputManager] XTest extension not available.");
-        return false;
-    }
-
-    let root = conn.setup().roots[screen_num].root;
-
-    let (orig_x, orig_y) = match conn.query_pointer(root) {
-        Ok(reply) => {
-            if let Ok(ptr) = reply.reply() {
-                (ptr.root_x, ptr.root_y)
-            } else {
-                (start_x, start_y)
-            }
-        }
-        Err(_) => (start_x, start_y),
-    };
-
-    if save_cursor {
-        println!("[Bot Cursor] Saved OLD mouse position before drag: ({}, {})", orig_x, orig_y);
-    }
-
-    // 1. Initial positioning movement to start coordinates
-    let initial_path = generate_human_path(orig_x, orig_y, start_x, start_y, 160);
-    for (px, py, step_delay) in initial_path {
-        let _ = conn.xtest_fake_input(6, 0, 0, root, px, py, 0);
-        let _ = conn.flush();
-        thread::sleep(step_delay);
-    }
-    let _ = conn.xtest_fake_input(6, 0, 0, root, start_x, start_y, 0);
-    let _ = conn.flush();
-
-    let mut rng = SimpleRng::new();
-    let pre_press_ms = rng.gen_range_u64(30, 50);
-    thread::sleep(Duration::from_millis(pre_press_ms));
-
-    // 2. Button 1 press (ButtonPress = 4, detail = 1)
-    let _ = conn.xtest_fake_input(4, 1, 0, root, start_x, start_y, 0);
-    let _ = conn.flush();
-    // Hold button pressed at origin before starting motion (essential for game engines to initiate drag)
-    let hold_start_ms = rng.gen_range_u64(70, 110);
-    thread::sleep(Duration::from_millis(hold_start_ms));
-
-    // 3. Smooth drag motion interpolation
-    let step_interval_ms = 10u64;
-    let steps = (duration_ms / step_interval_ms).max(10);
-    let sleep_per_step = (duration_ms / steps).max(5);
-    let mut aborted = false;
-
-    for step in 1..=steps {
-        let t = step as f32 / steps as f32;
-        // Ease-in-out quadratic smoothing for natural drag
-        let ease = if t < 0.5 {
-            2.0 * t * t
-        } else {
-            -1.0 + (4.0 - 2.0 * t) * t
-        };
-        
-        let cx = start_x as f32 + (end_x as f32 - start_x as f32) * ease;
-        let cy = start_y as f32 + (end_y as f32 - start_y as f32) * ease;
-        
-        let _ = conn.xtest_fake_input(6, 0, 0, root, cx.round() as i16, cy.round() as i16, 0);
-        let _ = conn.flush();
-        thread::sleep(Duration::from_millis(sleep_per_step));
-        
-        if let Some(ref mut cb) = sweep_callback {
-            // Check sweep callback every 5 steps
-            if step % 5 == 0 && cb() {
-                aborted = true;
-                println!("[InputManager] Drag sweep aborted due to callback match.");
-                break;
+    let mut current_pos = None;
+    if let Ok((conn, screen_num)) = RustConnection::connect(None) {
+        let root = conn.setup().roots[screen_num].root;
+        if let Ok(cookie) = conn.query_pointer(root) {
+            if let Ok(reply) = cookie.reply() {
+                current_pos = Some((reply.root_x, reply.root_y));
             }
         }
     }
-    
-    // 4. Ensure final position and settle before release
-    if !aborted {
-        let _ = conn.xtest_fake_input(6, 0, 0, root, end_x, end_y, 0);
-        let _ = conn.flush();
-    }
+    let (orig_x, orig_y) = current_pos.unwrap_or((start_x, start_y));
 
-    // Hold button pressed at destination before release (ensures drop/swipe momentum registration)
-    let hold_end_ms = rng.gen_range_u64(70, 110);
-    thread::sleep(Duration::from_millis(hold_end_ms));
+    // Warp to start, mouse down, warp to end, mouse up
+    let args = vec![
+        "mousemove".to_string(), start_x.to_string(), start_y.to_string(),
+        "mousedown".to_string(), "1".to_string(),
+        "mousemove".to_string(), end_x.to_string(), end_y.to_string(),
+        "mouseup".to_string(), "1".to_string(),
+    ];
+    let status = std::process::Command::new("xdotool")
+        .args(&args)
+        .status();
 
-    // 5. Button 1 release (ButtonRelease = 5, detail = 1)
-    let release_x = if aborted { start_x } else { end_x };
-    let release_y = if aborted { start_y } else { end_y };
-    let _ = conn.xtest_fake_input(5, 1, 0, root, release_x, release_y, 0);
-    let _ = conn.flush();
-    thread::sleep(Duration::from_millis(rng.gen_range_u64(40, 60)));
-
-    // 6. Optional cursor restoration
-    if save_cursor {
-        let return_path = generate_human_path(release_x, release_y, orig_x, orig_y, 160);
-        for (px, py, step_delay) in return_path {
-            let _ = conn.xtest_fake_input(6, 0, 0, root, px, py, 0);
-            let _ = conn.flush();
-            thread::sleep(step_delay);
+    if let Ok(s) = status {
+        if s.success() {
+            if let Some(ref mut cb) = sweep_callback {
+                let _ = cb();
+            }
+            if save_cursor {
+                let _ = std::process::Command::new("xdotool")
+                    .args(&["mousemove", &orig_x.to_string(), &orig_y.to_string()])
+                    .status();
+            }
+            return true;
         }
-        let _ = conn.xtest_fake_input(6, 0, 0, root, orig_x, orig_y, 0);
-        let _ = conn.flush();
     }
-
-    true
+    false
 }
 
 /// Dispatches native hardware-level mouse click to X11 via XTest extension
@@ -776,37 +646,13 @@ pub fn send_x11_click(target_window: Option<u32>, target_x: i16, target_y: i16) 
     send_x11_click_ex(target_window, target_x, target_y, false)
 }
 
-/// Dispatches native keyboard key press and release to X11 via XTest extension
-pub fn send_x11_key(target_window: Option<u32>, key_name: &str) -> bool {
-    use x11rb::protocol::xtest::ConnectionExt;
-
-    if let Ok((conn, screen_num)) = RustConnection::connect(None) {
-        let root = conn.setup().roots[screen_num].root;
-        let mut guard = InputGrabGuard::grab_both(&conn, target_window, root);
-        let keysym = match key_name.to_lowercase().as_str() {
-            "escape" | "esc" => 0xff1b,
-            "return" | "enter" => 0xff0d,
-            "space" => 0x0020,
-            "tab" => 0xff09,
-            _ => 0,
-        };
-
-        if keysym != 0 {
-            if let Some(keycode) = find_keycode_for_keysym(&conn, keysym) {
-                // Ungrab the keyboard BEFORE the key press so the target window receives it.
-                guard.ungrab_keyboard();
-                
-                // KeyPress = 2, KeyRelease = 3
-                let _ = conn.xtest_fake_input(2, keycode, 0, root, 0, 0, 0);
-                let _ = conn.flush();
-                thread::sleep(Duration::from_millis(70));
-                let _ = conn.xtest_fake_input(3, keycode, 0, root, 0, 0, 0);
-                let _ = conn.flush();
-                return true;
-            }
-        }
-    }
-    false
+/// Dispatches native keyboard key press and release to X11 via xdotool
+pub fn send_x11_key(_target_window: Option<u32>, key_name: &str) -> bool {
+    let _input_guard = BotInputActiveGuard::new();
+    let status = std::process::Command::new("xdotool")
+        .args(&["key", key_name])
+        .status();
+    status.map(|s| s.success()).unwrap_or(false)
 }
 
 fn is_key_down(keys: &[u8; 32], keycode: u8) -> bool {

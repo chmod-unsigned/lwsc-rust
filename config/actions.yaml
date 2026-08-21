@@ -96,6 +96,18 @@ drag_to_right:
   - 0.5
   drag_duration_ms: 1000
   shortcut: ctrl+r
+
+drag_to_left:
+  display_name: Drag to left
+  action_type: drag_drop
+  drag_start:
+  - 0.20000000298023224
+  - 0.5
+  drag_end:
+  - 0.800000011920929
+  - 0.5
+  drag_duration_ms: 1000
+  shortcut: ctrl+l
 loot_claim:
   display_name: Loot button
   description: Auto-claim loot rewards when loot button appears

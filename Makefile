@@ -24,7 +24,13 @@ check:
 
 ## 🤖 Run
 bot:
-	@$(CARGO) run --bin bot
+	@$(CARGO) run --bin bot -- $(ARGS)
+
+bot-headless:
+	@DISPLAY=:0 $(CARGO) run --bin bot -- --headless $(ARGS)
+
+bot-on-target:
+	@DISPLAY=:0 $(CARGO) run --bin bot -- $(ARGS)
 
 run:
 	@$(CARGO) run --bin lwsc2 -- $(ARGS)
@@ -53,6 +59,8 @@ help:
 	@echo "  make check             Fast syntax and type checking"
 	@echo ""
 	@echo "  make bot               Launch the main game automation bot"
+	@echo "  make bot-headless      Launch the bot in headless mode (perfect for SSH, no GUI)"
+	@echo "  make bot-on-target     Launch the bot on target DISPLAY=:0 (GUI starts hidden, opens on target via Ctrl+O)"
 	@echo "  make run ARGS=\"...\"    Run the lwsc2 CLI tool with custom arguments"
 	@echo ""
 	@echo "  make calc-roi          Calculate ROIs for states (dry-run)"

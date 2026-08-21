@@ -268,7 +268,7 @@ impl GameBot {
         }
     }
 
-    pub fn start(&self) {
+    fn print_startup_summary(&self) {
         let win_info = self.window_tracker.get_window_info();
         thread::sleep(Duration::from_millis(600)); // allow initial detection pass
         let initial_res = self.state_thread.get_current_result();
@@ -324,6 +324,10 @@ impl GameBot {
         println!("   {} : Display global shortcuts help", "Ctrl+H".green().bold());
         println!("{}", "====================================================================".bright_blue());
         println!("{}", "Bot is active: Continuous detection on ANY mouse or keyboard event. Press Ctrl+C to exit.\n".bold());
+    }
+
+    pub fn start(&self) {
+        self.print_startup_summary();
 
         // Run GUI event loop on main thread (blocks until app exits)
         ConfigWindow::run_on_main_thread(
@@ -331,6 +335,14 @@ impl GameBot {
             self.state_thread.clone(),
             self.window_tracker.clone(),
         );
+    }
+
+    pub fn start_headless(&self) {
+        self.print_startup_summary();
+        println!("{}", "Running in HEADLESS mode (no GUI). Press Ctrl+C to terminate.\n".cyan().bold());
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
     }
 
     pub fn stop(&self) {

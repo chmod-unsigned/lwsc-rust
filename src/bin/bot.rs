@@ -25,6 +25,9 @@ struct Args {
 
     #[arg(long, aliases = ["root"], help = "Define initial game state root (BASE or WORLD_MAP)")]
     root_state: Option<String>,
+
+    #[arg(long, help = "Run in headless mode without launching the configuration GUI window")]
+    headless: bool,
 }
 
 fn main() {
@@ -75,5 +78,9 @@ fn main() {
         true,
         initial_root,
     );
-    bot.start();
+    if args.headless {
+        bot.start_headless();
+    } else {
+        bot.start();
+    }
 }

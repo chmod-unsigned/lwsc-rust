@@ -35,6 +35,9 @@ impl ConfigWindow {
         SHOW_FULL_CONFIG_REQUEST.store(true, Ordering::SeqCst);
         if let Ok(guard) = EGUI_CTX.read() {
             if let Some(ref ctx) = *guard {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 ctx.request_repaint();
             }
         }
@@ -49,6 +52,9 @@ impl ConfigWindow {
         SHOW_QUICK_LAUNCHER_REQUEST.store(true, Ordering::SeqCst);
         if let Ok(guard) = EGUI_CTX.read() {
             if let Some(ref ctx) = *guard {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 ctx.request_repaint();
             }
         }
