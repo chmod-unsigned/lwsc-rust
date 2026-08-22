@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LWSC Bot Configuration</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        :root {
+            --bg-color: #0f111a;
+            --panel-bg: #1a1d2d;
+            --text-main: #e2e8f0;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --border: #2e334d;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1000px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin: 0;
+            background: linear-gradient(90deg, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .panel {
+            background-color: var(--panel-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border: 1px solid var(--border);
+        }
+
+        .panel-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--text-main);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1rem;
+        }
+
+        .card {
+            background-color: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            border-color: rgba(59, 130, 246, 0.5);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .card-title {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .card-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+        }
+
+        .badge {
+            background-color: rgba(59, 130, 246, 0.1);
+            color: #60a5fa;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #374151;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: var(--accent);
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(20px);
+        }
+
+        button {
+            background-color: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.6rem 1.2rem;
+            border-radius: 6px;
+            font-family: inherit;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: var(--accent-hover);
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>LWSC Config Editor</h1>
+        <button onclick="saveConfig()">Save Configuration</button>
+    </header>
+
+    <div class="panel">
+        <div class="panel-title">Actions</div>
+        <div class="grid" id="actions-grid">
+            <!-- Populated by JS -->
+        </div>
+    </div>
+    
+    <div class="panel">
+        <div class="panel-title">Sequences</div>
+        <div class="grid" id="sequences-grid">
+            <!-- Populated by JS -->
+        </div>
+    </div>
+</div>
+
+<script>
+    let configData = null;
+
+    async function loadConfig() {
+        try {
+            const res = await fetch('/api/config');
+            configData = await res.json();
+            renderActions();
+            renderSequences();
+        } catch (err) {
+            console.error("Failed to load config", err);
+            document.getElementById('actions-grid').innerHTML = '<p style="color: #ef4444;">Error loading configuration.</p>';
+        }
+    }
+
+    function renderActions() {
+        const grid = document.getElementById('actions-grid');
+        grid.innerHTML = '';
+        
+        if (!configData.Actions) return;
+
+        Object.entries(configData.Actions).forEach(([name, action]) => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            
+            card.innerHTML = `
+                <div class="card-header">
+                    <div class="card-title">${action.display_name || name}</div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" ${action.enabled ? 'checked' : ''} onchange="toggleAction('${name}', this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="card-desc">${action.description || 'No description available.'}</div>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <span class="badge">State: ${action.state || 'Any'}</span>
+                    ${action.shortcut ? `<span class="badge" style="background-color: rgba(167, 139, 250, 0.1); color: #a78bfa;">${action.shortcut}</span>` : ''}
+                    <span class="badge" style="background-color: rgba(52, 211, 153, 0.1); color: #34d399;">${action.cooldown_s}s</span>
+                </div>
+            `;
+            grid.appendChild(card);
+        });
+    }
+
+    function renderSequences() {
+        const grid = document.getElementById('sequences-grid');
+        grid.innerHTML = '';
+        
+        if (!configData.Sequences || Object.keys(configData.Sequences).length === 0) {
+            grid.innerHTML = '<p class="card-desc">No sequences found in configuration.</p>';
+            return;
+        }
+
+        Object.entries(configData.Sequences).forEach(([name, seq]) => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            
+            card.innerHTML = `
+                <div class="card-header">
+                    <div class="card-title">${name}</div>
+                    ${seq.shortcut ? `<span class="badge" style="background-color: rgba(167, 139, 250, 0.1); color: #a78bfa;">${seq.shortcut}</span>` : ''}
+                </div>
+                <div class="card-desc">${seq.description || 'No description available.'}</div>
+                <div class="card-desc" style="margin-bottom:0;"><strong>Steps:</strong> ${seq.steps ? seq.steps.length : 0}</div>
+            `;
+            grid.appendChild(card);
+        });
+    }
+
+    function toggleAction(name, isEnabled) {
+        if (configData.Actions[name]) {
+            configData.Actions[name].enabled = isEnabled;
+        }
+    }
+
+    async function saveConfig() {
+        try {
+            const btn = document.querySelector('button');
+            const originalText = btn.innerText;
+            btn.innerText = 'Saving...';
+            
+            await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(configData)
+            });
+            
+            btn.innerText = 'Saved!';
+            setTimeout(() => btn.innerText = originalText, 2000);
+        } catch (err) {
+            alert('Failed to save configuration');
+        }
+    }
+
+    // Initialize
+    loadConfig();
+</script>
+</body>
+</html>
